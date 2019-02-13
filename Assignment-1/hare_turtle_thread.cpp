@@ -88,6 +88,16 @@ void* thread_fun(void *thread_arg) {
     return NULL;
 }
 
+//function to print the final result
+void print_result() {
+    cout << "Final Hare Position : " << new_pos_hare << "\n";
+    cout << "Final Tortoise Position : " << new_pos_tort << "\n";
+    if(new_pos_hare == new_pos_tort) cout << "Match Drawn.\n";
+    else if(new_pos_hare > new_pos_tort) cout << "Hare won.\n";
+    else cout << "Tortoise won.\n";
+    return;
+}
+
 int main() {
     //seeding the random time generator
     srand(time(0));
