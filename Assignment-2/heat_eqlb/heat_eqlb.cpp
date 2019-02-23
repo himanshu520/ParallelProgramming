@@ -4,7 +4,7 @@
 #define MAX_REPEAT 1
 #define MAX_FUNCTIONS 3
 #define MAX_ARRAY_SIZE 20
-#define MAX_ITERATIONS (int)(1e7)
+#define MAX_ITERATIONS 500
 #define COEFFICIENT (1e-2)
 using namespace std;
 
@@ -209,7 +209,8 @@ int main(int argc, char **argv) {
     }
 
     if(argc != 1) cout << "For " << argv[1] << "\n";
-    cout << "The size of the array is: " << array_size << "\n\n";
+    cout << "The size of the array is: " << array_size << "\n";
+    cout << "The number of iterations is: " << no_of_iterations << "\n\n";
     
     cout << "The time spent for reaching equilibrium is :\n";
     for(int function_no = 0; function_no < MAX_FUNCTIONS; function_no++) {
