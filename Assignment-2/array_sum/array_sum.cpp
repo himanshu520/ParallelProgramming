@@ -1,12 +1,10 @@
 #include<bits/stdc++.h>
 #include<pthread.h>
 #include<semaphore.h>
-#include <sys/time.h>
-#include <sys/resource.h>
 #define MAX_THREADS 10
-#define MAX_REPEAT 20
+#define MAX_REPEAT 10
 #define MAX_FUNCTIONS 3
-#define MAX_ARRAY_SIZE (int)(1e7)
+#define MAX_ARRAY_SIZE (int)(1e9)
 using namespace std;
 
 typedef void* (*function_p) (void *);
@@ -71,8 +69,6 @@ void *semaphore_sum(void *arg) {
 
 
 int main(int argc, char **argv) {
-
-    setpriority(PRIO_PROCESS, 0, -20);
 
 
     if(argc == 1) {
@@ -155,7 +151,7 @@ int main(int argc, char **argv) {
                     pthread_join(threads[thread_no], NULL);
 
                 clock_t end_time = clock();
-                running_time[function_no][no_of_threads - 1] += (double)(end_time - start_time) / CLOCKS_PER_SEC;
+                running_time[function_no][no_of_threads - 1] += ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
             }
 
             running_time[function_no][no_of_threads - 1] /= MAX_REPEAT;

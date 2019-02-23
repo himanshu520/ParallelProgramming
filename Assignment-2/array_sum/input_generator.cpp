@@ -4,7 +4,7 @@ using namespace std;
 
 int main() {
 
-    int array_size = 1000;
+    int array_size = 100000;
     srand(time(0));
     
     for(int input_file_no = 1; input_file_no <= MAX_INPUT_FILES; input_file_no++) {
@@ -13,7 +13,7 @@ int main() {
         cout << array_size << "\n";
         for(int i = 0; i < array_size; i++)
             cout << (rand() % 200 - 100) << "\n";
-        array_size *= 10;
+        array_size *= 5;
     }
     
     return 0;

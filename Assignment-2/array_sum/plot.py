@@ -15,7 +15,7 @@ for function_no in range(MAX_FUNCTIONS):
         running_time.append(float(input()))
     plt.plot(range(1, MAX_THREADS + 1), running_time, colors[function_no], label=function_name)
 
-plt.title(input_file_name)
+plt.title(input_file_name + "  (array size = " + str(array_size) + ")" )
 plt.xlabel("No of threads")
 plt.ylabel("Running time (seconds)")
 plt.legend()
