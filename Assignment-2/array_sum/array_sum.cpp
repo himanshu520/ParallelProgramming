@@ -158,7 +158,7 @@ int main(int argc, char **argv) {
         }
     }
 
-
+    if(argc != 1) cout << "For " << argv[1] << "\n";
     cout << "\nThe sum of the array is: " << global_sum << "\n";
     cout << "The size of the array is: " << array_size << "\n\n";
     
