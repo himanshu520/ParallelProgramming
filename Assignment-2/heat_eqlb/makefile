@@ -1,5 +1,6 @@
-SOURCE = array_sum.cpp
+SOURCE = heat_eqlb.cpp
 PROGRAM_NAME = array_sum
+TEST_GENERATOR = input_generator.cpp
 CC = g++
 CFLAGS = -std=c++14 -lpthread
 
@@ -12,6 +13,11 @@ run : ${PROGRAM_NAME}
 	python3 plot.py < data.txt
 	\rm data.txt
 	@echo "======================================================================================="
+
+testgen :
+	g++ ${TEST_GENERATOR}
+	./a.out
+	\rm a.out
 
 test : ${PROGRAM_NAME}
 	./${PROGRAM_NAME} input1.txt
@@ -109,3 +115,6 @@ test10 : ${PROGRAM_NAME}
 
 clean :
 	\rm ${PROGRAM_NAME} *.png *.out
+
+cleanall :
+	\rm ${PROGRAM_NAME} *.png *.out *.txt
