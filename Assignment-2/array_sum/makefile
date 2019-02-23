@@ -15,7 +15,7 @@ run : ${PROGRAM_NAME}
 	@echo "======================================================================================="
 
 testgen :
-	g++ {TEST_GENERATOR}
+	g++ ${TEST_GENERATOR}
 	./a.out
 	\rm a.out
 
@@ -70,3 +70,6 @@ test5 : ${PROGRAM_NAME}
 
 clean :
 	\rm ${PROGRAM_NAME} *.png *.out
+
+cleanall :
+	\rm ${PROGRAM_NAME} *.png *.out *.txt
