@@ -4,6 +4,7 @@
 #define MAX_THREADS 10
 #define MAX_REPEAT 5
 #define MAX_FUNCTIONS 3
+#define MAX_ARRAY_SIZE (int)(1e7)
 using namespace std;
 
 typedef void* (*function_p) (void *);
@@ -18,7 +19,7 @@ sem_t sum_semaphore;
 void* busy_wait_sum(void *arg) {
     
     int my_rank = *((int*) arg), my_sum = 0;
-    int my_low = (array_size + no_of_threads - 1) / no_of_threads;
+    int my_low = (array_size + no_of_threads - 1) / no_of_threads - 1;
     int my_high = min(my_low + (array_size + no_of_threads - 1) / no_of_threads, array_size);
     
     for(int i = my_low; i < my_high; i++)
@@ -26,7 +27,7 @@ void* busy_wait_sum(void *arg) {
 
     while(global_rank != my_rank); {
         global_sum += my_sum;
-        global_sum++;
+        global_rank++;
     }
 
     return NULL;
@@ -68,14 +69,15 @@ int main(int argc, char **argv) {
 
     if(argc == 1) {
 
-        cout << "Enter the size of the array (should be between 10 and 10^8 inclusive): ";
+        cout << "Enter the size of the array (should be between " << MAX_THREADS << " and " 
+             << MAX_ARRAY_SIZE << " inclusive): ";
         cin >> array_size;
-        if(array_size < 10 || array_size > 1e8) {
-            cerr << "Invalid array size entered.\n Terminating program.......\n";
+        if(array_size < MAX_THREADS || array_size > MAX_ARRAY_SIZE) {
+            cerr << "Invalid array size entered.\nTerminating program.......\n";
             exit(0);
         }
-        arr = new int[array_size];
 
+        arr = new int[array_size];
         cout << "Enter the elements of the array: \n";
         for(int i = 0; i < array_size; i++) {
             cout << "\tIndex" << setw(9) << (i + 1) << " :\t";
@@ -84,14 +86,24 @@ int main(int argc, char **argv) {
 
     } else {
         
-        cin >> array_size;
-        if(array_size < 1 || array_size > 1e8) {
-            cerr << "Invalid array size entered.\n Terminating program.......\n";
+        ifstream fin(argv[1]);
+        if(fin.is_open()) {
+
+            fin >> array_size;
+            if(array_size < MAX_THREADS || array_size > MAX_ARRAY_SIZE) {
+                cerr << "Invalid array size entered.\nTerminating program.......\n";
+                exit(0);
+            }
+            
+            arr = new int[array_size];
+            for(int i = 0; i < array_size; i++)
+                fin >> arr[i]; 
+
+            fin.close();
+        } else {
+            cerr << "Error opening input file.\nTerminating program........\n";
             exit(0);
         }
-        
-        for(int i = 0; i < array_size; i++)
-            cin >> arr[i]; 
 
     }
 
@@ -102,28 +114,36 @@ int main(int argc, char **argv) {
     sem_init(&sum_semaphore, 0, 1);
 
     for(int function_no = 0; function_no < MAX_FUNCTIONS; function_no++) {
+
         for(no_of_threads = 1; no_of_threads <= MAX_THREADS; no_of_threads++) {
-            
+
             running_time[function_no][no_of_threads - 1] = 0;
 
             for(int repeat_count = 0; repeat_count < MAX_REPEAT; repeat_count++) {
+                
                 global_sum = global_rank = 0;
                 clock_t start_time = clock();
 
                 pthread_t threads[no_of_threads];
+                int thread_arg[no_of_threads];
 
                 for(int thread_no = 0; thread_no < no_of_threads; thread_no++) {
-                    int ret = pthread_create(&threads[thread_no], NULL, &busy_wait_sum, (void *) (&thread_no));
+                    thread_arg[thread_no] = thread_no;
+                    int ret = pthread_create(&threads[thread_no], NULL, &busy_wait_sum, (void *) (&thread_arg[thread_no]));
                     if(ret != 0) {
                         cerr << "Error occurred during execution.\nTerminating program........\n";
                         for(int thread__no = 0; thread__no < thread_no; thread__no++)
                             pthread_cancel(threads[thread__no]);
+                            
+                        delete[] arr;
+                        pthread_mutex_destroy(&sum_mutex);
+                        sem_destroy(&sum_semaphore);
                         exit(0);
                     }
                 }
 
-                for(int i = 0; i < no_of_threads; i++)
-                    pthread_join(threads[i], NULL);
+                for(int thread_no = 0; thread_no < no_of_threads; thread_no++)
+                    pthread_join(threads[thread_no], NULL);
 
                 clock_t end_time = clock();
                 running_time[function_no][no_of_threads - 1] += (double)(end_time - start_time) / CLOCKS_PER_SEC;
@@ -146,20 +166,27 @@ int main(int argc, char **argv) {
                 cout << setw(10) << setprecision(5) << running_time[function_no][no_of_threads] << "\t";
             cout << "\n\n";
         }
+
     }
     
-    cout << global_sum << " " << array_size << "\n";
+    ofstream fout("data.txt");
 
-    cout << MAX_FUNCTIONS << " " << MAX_THREADS << "\n";
-
-    for(int function_no = 0; function_no < MAX_THREADS; function_no++) {
-        cout << thread_functions_name[function_no] << "\n\t";
-        for(int no_of_threads = 0; no_of_threads < MAX_THREADS; no_of_threads++)
-            cout << setw(10) << setprecision(5) << running_time[function_no][no_of_threads] << "\t";
-        cout << "\n\n";
+    if(fout.is_open()) {
+        fout << global_sum << "\n" << array_size << "\n";
+        fout << MAX_FUNCTIONS << "\n" << MAX_THREADS << "\n";
+        for(int function_no = 0; function_no < MAX_THREADS; function_no++) {
+            fout << thread_functions_name[function_no] << "\n";
+            for(int no_of_threads = 0; no_of_threads < MAX_THREADS; no_of_threads++)
+                fout << setw(10) << setprecision(5) << running_time[function_no][no_of_threads] << "\n";
+        }
+        fout.close();
+    } else {
+        cerr << "Error writing output to file\n.Terminating program........";
     }
 
     delete[] arr;
+    pthread_mutex_destroy(&sum_mutex);
+    sem_destroy(&sum_semaphore);
 
     return 0;
 }
