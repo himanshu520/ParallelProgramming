@@ -1,8 +1,10 @@
 #include<bits/stdc++.h>
 #include<pthread.h>
 #include<semaphore.h>
+#include <sys/time.h>
+#include <sys/resource.h>
 #define MAX_THREADS 10
-#define MAX_REPEAT 5
+#define MAX_REPEAT 20
 #define MAX_FUNCTIONS 3
 #define MAX_ARRAY_SIZE (int)(1e7)
 using namespace std;
@@ -69,6 +71,9 @@ void *semaphore_sum(void *arg) {
 
 
 int main(int argc, char **argv) {
+
+    setpriority(PRIO_PROCESS, 0, -20);
+
 
     if(argc == 1) {
 

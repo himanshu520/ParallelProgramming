@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 
-input_file_name = input()
+input_file_name = input().split(".")[0]
 global_sum = int(input())
 array_size = int(input())
 MAX_FUNCTIONS = int(input())
@@ -19,4 +19,5 @@ plt.title(input_file_name)
 plt.xlabel("No of threads")
 plt.ylabel("Running time (seconds)")
 plt.legend()
+plt.savefig(input_file_name + ".png")
 plt.show()
