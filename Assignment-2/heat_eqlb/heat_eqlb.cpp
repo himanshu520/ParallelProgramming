@@ -1,7 +1,7 @@
 #include<bits/stdc++.h>
 #include<pthread.h>
 #include<semaphore.h>
-#define MAX_REPEAT 10
+#define MAX_REPEAT 1
 #define MAX_FUNCTIONS 3
 #define MAX_ARRAY_SIZE 20
 #define MAX_ITERATIONS (int)(1e7)
@@ -10,7 +10,7 @@ using namespace std;
 
 typedef void* (*function_p) (void *);
 
-int array_size, no_of_threads, no_of_iterations, mutex_count = 0;
+int array_size, no_of_threads, no_of_iterations, mutex_count;
 double *arr_old, *arr_new;
 double running_time[MAX_FUNCTIONS];
 pthread_mutex_t sum_mutex;
@@ -21,7 +21,7 @@ pthread_barrier_t barrier_var;
 
 void* mutex_busy_wait_barrier(void *arg) {
     
-    int my_rank = *((int*) arg), my_sum = 0;
+    int my_rank = *((int*) arg);
     
     for(int iter_count = 1; iter_count <= no_of_iterations; iter_count++) {
 
@@ -62,7 +62,7 @@ void* condition_var_barrier(void *arg) {
 
         pthread_mutex_lock(&condition_mutex);
         mutex_count++;
-        if(mutex_count == no_of_threads - 1) {
+        if(mutex_count == no_of_threads) {
             mutex_count = 0;
             for(int thrd = 0; thrd < no_of_threads; thrd++)
                 arr_old[thrd] = arr_new[thrd];
@@ -173,11 +173,11 @@ int main(int argc, char **argv) {
         running_time[function_no] = 0;
 
         for(int repeat_count = 0; repeat_count < MAX_REPEAT; repeat_count++) {
-            
             clock_t start_time = clock();
 
             pthread_t threads[no_of_threads];
             int thread_arg[no_of_threads];
+            mutex_count = 0;
 
             for(int thread_no = 0; thread_no < no_of_threads; thread_no++) {
                 thread_arg[thread_no] = thread_no;
@@ -213,7 +213,7 @@ int main(int argc, char **argv) {
     
     cout << "The time spent for reaching equilibrium is :\n";
     for(int function_no = 0; function_no < MAX_FUNCTIONS; function_no++) {
-        cout << thread_functions_name[function_no] << " :\t" << setw(10) << fixed << setprecision(5) 
+        cout << thread_functions_name[function_no] << " : " << fixed << setprecision(5) 
              << running_time[function_no] << "\n";
     }
     
