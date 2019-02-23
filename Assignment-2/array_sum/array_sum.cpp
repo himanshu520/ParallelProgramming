@@ -11,7 +11,7 @@ typedef void* (*function_p) (void *);
 
 int array_size, no_of_threads, global_sum, global_rank;
 int *arr;
-double running_time[3][MAX_THREADS];
+double running_time[MAX_FUNCTIONS][MAX_THREADS];
 pthread_mutex_t sum_mutex;
 sem_t sum_semaphore;
 
@@ -179,7 +179,7 @@ int main(int argc, char **argv) {
         else fout << argv[1] << "\n";
         fout << global_sum << "\n" << array_size << "\n";
         fout << MAX_FUNCTIONS << "\n" << MAX_THREADS << "\n";
-        for(int function_no = 0; function_no < MAX_THREADS; function_no++) {
+        for(int function_no = 0; function_no < MAX_FUNCTIONS; function_no++) {
             fout << thread_functions_name[function_no] << "\n";
             for(int no_of_threads = 0; no_of_threads < MAX_THREADS; no_of_threads++)
                 fout << setw(10) << setprecision(5) << running_time[function_no][no_of_threads] << "\n";
