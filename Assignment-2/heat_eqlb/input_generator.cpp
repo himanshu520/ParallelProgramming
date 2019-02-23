@@ -14,7 +14,7 @@ int main() {
         cout << array_size << "\n";
         cout << no_of_iterations << "\n";
         for(int i = 0; i < array_size; i++)
-            cout << fixed << setprecision(5) << (rand() % 1000) * sin(i * PI) << "\n";
+            cout << fixed << setprecision(5) << (rand() % 1000) * sin((rand() % 1000) * PI / 1000) << "\n";
         array_size += 2;
     }
     
