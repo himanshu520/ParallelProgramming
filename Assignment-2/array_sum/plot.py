@@ -1,4 +1,4 @@
-import matplotlib as plt
+import matplotlib.pyplot as plt
 
 open("data.txt", "r")
 
@@ -16,6 +16,6 @@ for function_no in range(MAX_FUNCTIONS):
     running_time.append([])
     for thread_no in range(MAX_THREADS):
         running_time[function_no].append(input())
-    plt.plot(range(1, MAX_FUNCTIONS + 1), running_time[function_no], label=function_names[function_no])
+    plt.plot(range(1, MAX_FUNCTIONS + 1), running_time[function_no], colors[function_no], label=function_names[function_no])
 
 plt.show()
