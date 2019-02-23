@@ -19,9 +19,9 @@ sem_t sum_semaphore;
 void* busy_wait_sum(void *arg) {
     
     int my_rank = *((int*) arg), my_sum = 0;
-    int my_low = (array_size + no_of_threads - 1) / no_of_threads - 1;
+    int my_low = (array_size + no_of_threads - 1) / no_of_threads * my_rank;
     int my_high = min(my_low + (array_size + no_of_threads - 1) / no_of_threads, array_size);
-    
+
     for(int i = my_low; i < my_high; i++)
         my_sum += arr[i];
 
@@ -33,10 +33,11 @@ void* busy_wait_sum(void *arg) {
     return NULL;
 }
 
+
 void* mutex_sum(void *arg) {
 
     int my_rank = *((int*) arg), my_sum = 0;
-    int my_low = (array_size + no_of_threads - 1) / no_of_threads;
+    int my_low = (array_size + no_of_threads - 1) / no_of_threads * my_rank;
     int my_high = min(my_low + (array_size + no_of_threads - 1) / no_of_threads, array_size);
     
     for(int i = my_low; i < my_high; i++)
@@ -49,10 +50,11 @@ void* mutex_sum(void *arg) {
     return NULL;
 }
 
+
 void *semaphore_sum(void *arg) {
 
     int my_rank = *((int*) arg), my_sum = 0;
-    int my_low = (array_size + no_of_threads - 1) / no_of_threads;
+    int my_low = (array_size + no_of_threads - 1) / no_of_threads * my_rank;
     int my_high = min(my_low + (array_size + no_of_threads - 1) / no_of_threads, array_size);
     
     for(int i = my_low; i < my_high; i++)
@@ -64,6 +66,7 @@ void *semaphore_sum(void *arg) {
 
     return NULL;
 }
+
 
 int main(int argc, char **argv) {
 
@@ -107,6 +110,7 @@ int main(int argc, char **argv) {
 
     }
 
+
     function_p thread_functions[MAX_FUNCTIONS] = {&busy_wait_sum, &mutex_sum, &semaphore_sum};
     string thread_functions_name[] = {"BusyWaiting", "Mutex", "Semaphore"};
 
@@ -129,7 +133,7 @@ int main(int argc, char **argv) {
 
                 for(int thread_no = 0; thread_no < no_of_threads; thread_no++) {
                     thread_arg[thread_no] = thread_no;
-                    int ret = pthread_create(&threads[thread_no], NULL, &busy_wait_sum, (void *) (&thread_arg[thread_no]));
+                    int ret = pthread_create(&threads[thread_no], NULL, thread_functions[function_no], (void *) (&thread_arg[thread_no]));
                     if(ret != 0) {
                         cerr << "Error occurred during execution.\nTerminating program........\n";
                         for(int thread__no = 0; thread__no < thread_no; thread__no++)
@@ -154,24 +158,24 @@ int main(int argc, char **argv) {
         }
     }
 
-    if(argc == 1) {
-        
-        cout << "The sum of the array is:" << global_sum << "\n";
-        cout << "The size of the array is: " << array_size << "\n";
-        
-        cout << "The time spent for computing the array sum (in order of thread no from 1 to " << MAX_THREADS << "):\n";
-        for(int function_no = 0; function_no < MAX_THREADS; function_no++) {
-            cout << thread_functions_name[function_no] << " :\n\t";
-            for(int no_of_threads = 0; no_of_threads < MAX_THREADS; no_of_threads++)
-                cout << setw(10) << setprecision(5) << running_time[function_no][no_of_threads] << "\t";
-            cout << "\n\n";
-        }
 
+    cout << "\nThe sum of the array is: " << global_sum << "\n";
+    cout << "The size of the array is: " << array_size << "\n\n";
+    
+    cout << "The time spent for computing the array sum (in order of thread no from 1 to " << MAX_THREADS << "):\n";
+    for(int function_no = 0; function_no < MAX_FUNCTIONS; function_no++) {
+        cout << thread_functions_name[function_no] << " :\n\t";
+        for(int no_of_threads = 0; no_of_threads < MAX_THREADS; no_of_threads++)
+            cout << setw(10) << fixed << setprecision(5) << running_time[function_no][no_of_threads] << "\t";
+        cout << "\n\n";
     }
     
-    ofstream fout("data.txt");
 
+    ofstream fout("data.txt");
     if(fout.is_open()) {
+
+        if(argc == 1) fout << "Console input\n";
+        else fout << argv[1] << "\n";
         fout << global_sum << "\n" << array_size << "\n";
         fout << MAX_FUNCTIONS << "\n" << MAX_THREADS << "\n";
         for(int function_no = 0; function_no < MAX_THREADS; function_no++) {
@@ -183,6 +187,7 @@ int main(int argc, char **argv) {
     } else {
         cerr << "Error writing output to file\n.Terminating program........";
     }
+
 
     delete[] arr;
     pthread_mutex_destroy(&sum_mutex);
