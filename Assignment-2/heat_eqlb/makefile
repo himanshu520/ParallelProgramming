@@ -47,9 +47,6 @@ test : ${PROGRAM_NAME}
 	./${PROGRAM_NAME} input9.txt
 	python3 plot.py < data.txt
 	@echo "======================================================================================="
-	./${PROGRAM_NAME} input10.txt
-	python3 plot.py < data.txt
-	@echo "======================================================================================="
 	\rm data.txt
 	@echo "======================================================================================="
 
@@ -103,12 +100,6 @@ test8 : ${PROGRAM_NAME}
 
 test9 : ${PROGRAM_NAME}
 	./${PROGRAM_NAME} input9.txt
-	python3 plot.py < data.txt
-	\rm data.txt
-	@echo "======================================================================================="
-
-test10 : ${PROGRAM_NAME}
-	./${PROGRAM_NAME} input10.txt
 	python3 plot.py < data.txt
 	\rm data.txt
 	@echo "======================================================================================="
