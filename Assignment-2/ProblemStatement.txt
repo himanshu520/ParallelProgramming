@@ -1,0 +1,16 @@
+Performance profile of synchronization constructs
+
+We discussed various synchronization primitives such as busy-waiting, mutexes, conditional variables, barriers, and read-write 
+locks. You are required to design experiments (or test cases), execute them and measure the performance of each of these 
+synchronization constructs. 
+
+Please note that the performance overheads depend on multiple factors such as library version, hardware and system capabilities,
+computation performed on each thread, number of cores, number of threads and so forth. Therefore, the performance measures are 
+not scalar numbers, but instead is a profile over varying quantities. Use the performance metrics such as speedup, and efficiency
+discussed in the class if you find them useful. Since there is significant run-to-run variations in multi-threaded programs, 
+ensure you repeat the same experiment at least 5 times while  measuring the performance. Report the maximum, minimum, and 
+average time taken for every study you perform. 
+
+You have to upload a report, test cases, post-processing scripts (if any), and Makefiles that you used/created for this study. 
+Use graphs in the report to quantify your measurements (with the raw data made available as an appendix), and summarize your 
+findings. Justify any unique observations you made from the data you observed.
