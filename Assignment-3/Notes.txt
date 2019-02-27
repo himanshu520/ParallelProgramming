@@ -1,0 +1,9 @@
+unistd.h is not part of standard C or C++, it is UNIX implementation.
+termios is the newer (now already a few decades old) Unix API for terminal I/O.
+
+By default the keyboard starts in canonical mode - the input is read only when we press enter. But for the text editor we want
+to run it in raw mode - that is the input gets read as soon as we press the keys.
+
+Pressing Ctrl+D tells the terminal that it should register EOF from standard input.
+
+ASCII character 0-31 and 127 are control characters
