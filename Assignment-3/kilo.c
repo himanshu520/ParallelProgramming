@@ -7,6 +7,7 @@
 
 #include<ctype.h>
 #include<errno.h>
+#include<stdarg.h>
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
@@ -14,6 +15,7 @@
 #include<unistd.h>
 #include<termios.h>
 #include<sys/ioctl.h>
+#include<time.h>
 #include<unistd.h>
 
 
@@ -42,6 +44,9 @@ struct editorConfig {
     int screencols;                    //number of columns in our current editor configuration
     int numrows;                       //number of rows (non empty) lines in our file
     erow *row;                         //dynamically allocated array that will store the rows of our file
+    char *filename;                    //file currently opened in the text editor
+    char statusmsg[80];
+    time_t statusmsg_time;
     struct termios orig_termios;       //we will store the original terminal configurations
 } E;
 
@@ -236,6 +241,9 @@ void editorAppendRow(char *s, size_t len) {
 /**************************************************************       file io       **************************************************************/
 //function for opening and reading files from disk
 void editorOpen(char *filename) {
+    free(E.filename);
+    E.filename = strdup(filename);
+
     FILE *fp = fopen(filename, "r");
     if(!fp) die("open");
 
@@ -314,10 +322,38 @@ void editorDrawRows(struct abuf *ab) {
             abAppend(ab, &E.row[filerow].render[E.coloff], len);
         }
 
-        abAppend(ab, "\x1b[K", 3);
-        if(y < E.screenrows - 1)
-            abAppend(ab, "\r\n", 2);
+        abAppend(ab, "\x1b[K\r\n", 5);
     }
+}
+
+//function to display the status bar
+void editorDrawStatusBar(struct abuf *ab) {
+    abAppend(ab, "\x1b[7m", 4);      //for dispalying the status bar with inverted colours
+    char status[80], rstatus[80];
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines", E.filename ? E.filename : "[No Name]", E.numrows);
+    int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows);
+    if(len > E.screencols) len = E.screencols;
+    abAppend(ab, status, len);
+    while(len < E.screencols) {
+        if(E.screencols - len == rlen) {
+            abAppend(ab, rstatus, rlen);
+            break;
+        } else {
+            abAppend(ab, " ", 1);
+            len++;
+        }
+    }
+    abAppend(ab, "\x1b[m", 3);
+    abAppend(ab, "\r\n", 2);
+}
+
+//function to display the message bar
+void editorDrawMessageBar(struct abuf *ab) {
+    abAppend(ab, "\x1b[K", 3);
+    int msglen = strlen(E.statusmsg);
+    if(msglen > E.screencols) msglen = E.screencols;
+    if(msglen && time(NULL) - E.statusmsg_time < 5)
+        abAppend(ab, E.statusmsg, msglen);
 }
 
 //function to refresh the screen after each keypress
@@ -330,6 +366,8 @@ void editorRefreshScreen() {
     abAppend(&ab, "\x1b[H", 3);      //reposition the cursor to the beginning of the screen
     
     editorDrawRows(&ab);             //call editorDrawRows() to draw the tilde on the screen
+    editorDrawStatusBar(&ab);        //call editorDrawStatusBar() to draw the status bar
+    editorDrawMessageBar(&ab);       //call editorDrawMessageBar() to draw the message bar
 
     char buf[32];
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1, E.rx - E.coloff + 1);
@@ -341,6 +379,14 @@ void editorRefreshScreen() {
     abFree(&ab);
 }
 
+//function to print the status message 
+void editorSetStatusMessage(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(E.statusmsg, sizeof(E.statusmsg), fmt, ap);
+    va_end(ap);
+    E.statusmsg_time = time(NULL);
+}
 
 /**************************************************************        input        **************************************************************/
 //function to move the cursor on screen using wsad keys
@@ -392,7 +438,8 @@ void editorProcessKeypress() {
             break;
 
         case END_KEY:
-            E.cx = E.screencols - 1;
+            if(E.cy < E.numrows)
+                E.cx = E.row[E.cy].size;
             break;
 
         case PAGE_UP:
@@ -421,9 +468,10 @@ void editorProcessKeypress() {
 /**************************************************************        init         **************************************************************/
 //function to initialise all the fields in strucutre E for the editor
 void initEditor() {
-    E.cx = E.cy = E.rx = E.numrows = E.rowoff = E.coloff = 0;
-    E.row = NULL;
+    E.cx = E.cy = E.rx = E.numrows = E.rowoff = E.coloff = E.statusmsg_time = 0;
+    E.row = NULL, E.filename = NULL, E.statusmsg[0] = '\0';
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
+    E.screenrows -= 2;
 }
 
 
@@ -433,6 +481,8 @@ int main(int argc, char **argv) {
     initEditor();
     if(argc >= 2) editorOpen(argv[1]);
     
+    editorSetStatusMessage("Help: Ctrl-Q = quit");
+
     while(1) {
         editorRefreshScreen();
         editorProcessKeypress();
