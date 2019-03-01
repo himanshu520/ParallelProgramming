@@ -6,4 +6,24 @@ to run it in raw mode - that is the input gets read as soon as we press the keys
 
 Pressing Ctrl+D tells the terminal that it should register EOF from standard input.
 
-ASCII character 0-31 and 127 are control characters
+ASCII character 0-31 and 127 are control characters. Pressing Ctrl+alphabetic_key removes the three significant bits from the 
+key. The resulting value which is of 5 bits lies in the range 1-26 inclusive. So, we can mask out the lower five bits
+from an alphabetic character to represent control character correspoding to it. Also, switching between lowercase and 
+uppercase alphabets can be done by setting and resetting the fifth bit (0-based indexing).
+
+We can send the terminal a four character escape sequence that tells it various text formatting to do. An escape sequence starts
+with ESCAPE followed by '[' and two other chararcters. So, a normal escape sequece would be of the form of "\x1b[tt" where tt stands
+for two characters. The various tasks that we can instruct the terminal to do are colouring the text, moving the cursor, clearing parts
+of the screen.
+
+Escape sequence terminal commands takes a command and also arguments. For example '\x1b2J'
+Here '\x1b[' tells that we are entering a escape sequence and J is the command to clear the screen. The argument in this 
+case is 2, which tells to clear the whole screen. If we pass 1 as the argument it will clear upto cursor and 0 would clear from the 
+cursor to the end of the screen. Also, 0 is the default argument, so just '\x1b[J' would also mean to clear till the end 
+of the screen. We can also pass multiple arguments wherever applicable by separating the arguments with a semicolon.
+Some common command are - 
+    J - Clear the screen
+    H - Reposition the cursor at a given location on the screen
+    C - To move the cursor right
+    B - To move the cursor down
+    n - can be used to get the terminal status (with arg 6 it gives the cursor position)
