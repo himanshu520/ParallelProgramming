@@ -1,19 +1,20 @@
+/**************************************************************       includes      **************************************************************/
 #include<ctype.h>
 #include<errno.h>
 #include<stdio.h>
 #include<stdlib.h>
+#include<string.h>
 #include<unistd.h>
 #include<termios.h>
 #include<sys/ioctl.h>
 #include<unistd.h>
 
 
-
-
+/**************************************************************        defines      **************************************************************/
 #define CTRL_KEY(k) ((k) & 0x1f)
 
 
-
+/**************************************************************         data        **************************************************************/
 //structure to store the editor configuration
 struct editorConfig {
     int screenrows;             //number of rows in our current editor configuration
@@ -22,8 +23,7 @@ struct editorConfig {
 } E;
 
 
-
-
+/**************************************************************       terminal      **************************************************************/
 //function to print error messages
 void die(const char *error_message) {
     write(STDOUT_FILENO, "\x1b[2J", 4);     //clear the terminal screen
@@ -120,28 +120,54 @@ int getWindowSize(int *rows, int *cols) {
 }
 
 
+/**************************************************************    append buffer    **************************************************************/
+struct abuf {
+    char *b;
+    int len;
+};
+
+#define ABUF_INIT {NULL, 0};
+
+void abAppend(struct abuf *ab, const char *s, int len) {
+    char *new = realloc(ab->b, ab->len + len);
+
+    if(new == NULL) return;
+    memcpy(&new[ab->len], s, len);
+    ab->b = new;
+    ab->len += len;
+}
+
+void abFree(struct abuf *ab) {
+    free(ab->b);
+}
 
 
+/**************************************************************       output        **************************************************************/
 //drawing '~' on the left side of the screen after the end of file
-void editorDrawRows() {
+void editorDrawRows(struct abuf *ab) {
     int y;
     for(y = 0; y < E.screenrows - 1; y++)
-        write(STDOUT_FILENO, "~\r\n", 3);
-    write(STDOUT_FILENO, "~", 1);
+        abAppend(ab, "~\r\n", 3);
+
+    abAppend(ab, "~", 1);
 }
 
 //function to refresh the screen after each keypress
 void editorRefreshScreen() {
-    write(STDOUT_FILENO, "\x1b[2J", 4);     //clear the terminal screen
-    write(STDOUT_FILENO, "\x1b[H", 3);      //reposition the cursor to the beginning of the screen
+    struct abuf ab = ABUF_INIT;
 
-    editorDrawRows();
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    abAppend(&ab, "\x1b[2J", 4);     //clear the terminal screen
+    abAppend(&ab, "\x1b[H", 3);      //reposition the cursor to the beginning of the screen
+    
+    editorDrawRows(&ab);             //call editorDrawRows() to draw the tilde on the screen
+
+    abAppend(&ab, "/x1b[H", 3);      //reposition the cursor to the beginning of the screen
+    write(STDOUT_FILENO, ab.b, ab.len);
+    free(&ab);
 }
 
 
-
-
+/**************************************************************        input        **************************************************************/
 //function to process keypresses
 void editorProcessKeypress() {
     char c = editorReadKey();
@@ -156,16 +182,14 @@ void editorProcessKeypress() {
 }
 
 
-
-
+/**************************************************************        init         **************************************************************/
 //function to initialise all the fields in strucutre E for the editor
 void initEditor() {
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
 }
 
 
-
-
+/**************************************************************        main         **************************************************************/
 int main() {
     char c;
     enableRawMode();
