@@ -191,6 +191,24 @@ void editorRefreshScreen() {
 
 
 /**************************************************************        input        **************************************************************/
+//function to move the cursor on screen using wsad keys
+void editorMoveCursor(char key) {
+    switch(key) {
+        case 'a':
+            E.cx--;
+            break;
+        case 'd':
+            E.cx++;
+            break;
+        case 'w':
+            E.cy--;
+            break;
+        case 's':
+            E.cy++;
+            break;
+    }
+}
+
 //function to process keypresses
 void editorProcessKeypress() {
     char c = editorReadKey();
@@ -200,6 +218,12 @@ void editorProcessKeypress() {
             write(STDOUT_FILENO, "\x1b[2J", 4);     //clear the terminal screen
             write(STDOUT_FILENO, "\x1b[H", 3);      //reposition the cursor to the beginning of the screen
             exit(0);
+            break;
+        case 'w':
+        case 's':
+        case 'a':
+        case 'd':
+            editorMoveCursor(c);
             break;
     }
 }
