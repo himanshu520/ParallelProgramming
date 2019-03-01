@@ -4,6 +4,7 @@
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
+#include<sys/types.h>
 #include<unistd.h>
 #include<termios.h>
 #include<sys/ioctl.h>
@@ -21,7 +22,7 @@ enum editorKey { ARROW_LEFT = 1000, ARROW_RIGHT, ARROW_UP, ARROW_DOWN, DEL_KEY, 
 //datatype to store a row of text
 typedef struct erow {
     int size;
-    char *chars;
+    char *chars;                       //pointer to a dynamically allocated character array representing a row of text
 } erow;
 
 //structure to store the editor configuration
@@ -172,6 +173,20 @@ int getWindowSize(int *rows, int *cols) {
 }
 
 
+/**************************************************************       file io       **************************************************************/
+//function for opening and reading files from disk
+void editorOpen() {
+    char *line = "Hello, world!";
+    ssize_t linelen = 13;
+
+    E.row.size = linelen;
+    E.row.chars = malloc(linelen + 1);
+    memcpy(E.row.chars, line, linelen);
+    E.row.chars[linelen] = '\0';
+    E.numrows = 1;
+}
+
+
 /**************************************************************    append buffer    **************************************************************/
 struct abuf {
     char *b;
@@ -309,6 +324,7 @@ int main() {
     char c;
     enableRawMode();
     initEditor();
+    editorOpen();
     
     while(1) {
         editorRefreshScreen();
