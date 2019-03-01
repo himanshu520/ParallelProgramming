@@ -36,8 +36,8 @@ struct editorConfig {
     int cx, cy;                        //to keep track of the current position of the cursor
     int screenrows;                    //number of rows in our current editor configuration
     int screencols;                    //number of columns in our current editor configuration
-    int numrows;
-    erow row;
+    int numrows;                       //number of rows (non empty) lines in our file
+    erow *row;                         //dynamically allocated array that will store the rows of our file
     struct termios orig_termios;       //we will store the original terminal configurations
 } E;
 
@@ -179,6 +179,19 @@ int getWindowSize(int *rows, int *cols) {
 }
 
 
+/**************************************************************   row operations    **************************************************************/
+void editorAppendRow(char *s, size_t len) {
+    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+
+    int at = E.numrows;
+    E.row[at].size = len;
+    E.row[at].chars = malloc(len + 1);
+    memcpy(E.row[at].chars, s, len);
+    E.row[at].chars[len] = '\0';
+    E.numrows++;
+}
+
+
 /**************************************************************       file io       **************************************************************/
 //function for opening and reading files from disk
 void editorOpen(char *filename) {
@@ -188,16 +201,10 @@ void editorOpen(char *filename) {
     char *line = NULL;
     size_t linecap = 0;
     ssize_t linelen;
-    linelen = getline(&line, &linecap, fp);
-    if(linelen != -1) {
+    while((linelen = getline(&line, &linecap, fp)) != -1) {
         while(linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) linelen--;
-        E.row.size = linelen;
-        E.row.chars = malloc(linelen + 1);
-        memcpy(E.row.chars, line, linelen);
-        E.row.chars[linelen] = '\0';
-        E.numrows = 1;
+        editorAppendRow(line, linelen);
     }
-    
     free(line);
     fclose(fp);
 }
@@ -246,9 +253,9 @@ void editorDrawRows(struct abuf *ab) {
                 abAppend(ab, "~", 1);
             }
         } else {
-            int len = E.row.size;
+            int len = E.row[y].size;
             if(len > E.screencols) len = E.screencols;
-            abAppend(ab, E.row.chars, len);
+            abAppend(ab, E.row[y].chars, len);
         }
 
         abAppend(ab, "\x1b[K", 3);
@@ -337,6 +344,7 @@ void editorProcessKeypress() {
 //function to initialise all the fields in strucutre E for the editor
 void initEditor() {
     E.cx = E.cy = E.numrows = 0;
+    E.row = NULL;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
 }
 
