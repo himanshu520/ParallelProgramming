@@ -18,6 +18,7 @@
 /**************************************************************         data        **************************************************************/
 //structure to store the editor configuration
 struct editorConfig {
+    int cx, cy;                 //to keep track of the current position of the cursor
     int screenrows;             //number of rows in our current editor configuration
     int screencols;             //number of columns in our current editor configuration
     struct termios orig_termios;       //we will store the original terminal configurations
@@ -204,6 +205,7 @@ void editorProcessKeypress() {
 /**************************************************************        init         **************************************************************/
 //function to initialise all the fields in strucutre E for the editor
 void initEditor() {
+    E.cx = E.cy = 0;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
 }
 
