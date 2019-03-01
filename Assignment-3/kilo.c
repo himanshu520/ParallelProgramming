@@ -179,7 +179,10 @@ void editorRefreshScreen() {
     
     editorDrawRows(&ab);             //call editorDrawRows() to draw the tilde on the screen
 
-    abAppend(&ab, "\x1b[H", 3);      //reposition the cursor to the beginning of the screen
+    char buf[32];
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    abAppend(&ab, buf, strlen(buf));
+
     abAppend(&ab, "\x1b[?25h", 6);   //again turn the cursor on
 
     write(STDOUT_FILENO, ab.b, ab.len);
