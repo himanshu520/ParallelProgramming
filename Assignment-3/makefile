@@ -1,7 +1,7 @@
-SOURCE = kilo.cpp
+SOURCE = kilo.c
 TARGET = kilo
-CC = g++
-FLAGS = -Wall -Wextra -pedantic -std=c++14
+CC = gcc
+FLAGS = -Wall -Wextra -pedantic -std=c11
 
 $(TARGET): $(SOURCE)
 	$(CC) $(SOURCE) -o $(TARGET) $(FLAGS)
@@ -10,4 +10,4 @@ run: $(TARGET)
 	./$(TARGET)
 
 clean:
-	\rm kilo
+	\rm ${TARGET}
