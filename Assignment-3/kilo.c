@@ -18,11 +18,19 @@ enum editorKey { ARROW_LEFT = 1000, ARROW_RIGHT, ARROW_UP, ARROW_DOWN, DEL_KEY, 
 
 
 /**************************************************************         data        **************************************************************/
+//datatype to store a row of text
+typedef struct erow {
+    int size;
+    char *chars;
+} erow;
+
 //structure to store the editor configuration
 struct editorConfig {
-    int cx, cy;                 //to keep track of the current position of the cursor
-    int screenrows;             //number of rows in our current editor configuration
-    int screencols;             //number of columns in our current editor configuration
+    int cx, cy;                        //to keep track of the current position of the cursor
+    int screenrows;                    //number of rows in our current editor configuration
+    int screencols;                    //number of columns in our current editor configuration
+    int numrows;
+    erow row;
     struct termios orig_termios;       //we will store the original terminal configurations
 } E;
 
@@ -291,7 +299,7 @@ void editorProcessKeypress() {
 /**************************************************************        init         **************************************************************/
 //function to initialise all the fields in strucutre E for the editor
 void initEditor() {
-    E.cx = E.cy = 0;
+    E.cx = E.cy = E.numrows = 0;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
 }
 
