@@ -35,6 +35,7 @@ typedef struct erow {
 struct editorConfig {
     int cx, cy;                        //to keep track of the current position of the cursor within the file
     int rowoff;                        //this will keep track of the row number corresponding to top of the screen 
+    int coloff;                        //this will keep track of the column number corresponding to left edge of the screen
     int screenrows;                    //number of rows in our current editor configuration
     int screencols;                    //number of columns in our current editor configuration
     int numrows;                       //number of rows (non empty) lines in our file
@@ -238,6 +239,8 @@ void abFree(struct abuf *ab) {
 void editorScroll() {
     if(E.cy < E.rowoff) E.rowoff = E.cy;
     if(E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
+    if(E.cx < E.coloff) E.coloff = E.cx;
+    if(E.cx >= E.coloff + E.screencols) E.coloff = E.cx - E.screencols + 1;
 }
 
 //drawing '~' on the left side of the screen after the end of file
@@ -261,9 +264,10 @@ void editorDrawRows(struct abuf *ab) {
                 abAppend(ab, "~", 1);
             }
         } else {
-            int len = E.row[filerow].size;
+            int len = E.row[filerow].size - E.coloff;
+            if(len < 0) len = 0;
             if(len > E.screencols) len = E.screencols;
-            abAppend(ab, E.row[filerow].chars, len);
+            abAppend(ab, &E.row[filerow].chars[E.coloff], len);
         }
 
         abAppend(ab, "\x1b[K", 3);
@@ -284,7 +288,7 @@ void editorRefreshScreen() {
     editorDrawRows(&ab);             //call editorDrawRows() to draw the tilde on the screen
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1, E.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1, E.cx - E.coloff + 1);
     abAppend(&ab, buf, strlen(buf));
 
     abAppend(&ab, "\x1b[?25h", 6);   //again turn the cursor on
@@ -302,7 +306,7 @@ void editorMoveCursor(int key) {
             if(E.cx != 0) E.cx--;
             break;
         case ARROW_RIGHT:
-            if(E.cx != E.screencols - 1) E.cx++;
+            E.cx++;
             break;
         case ARROW_UP:
             if(E.cy != 0) E.cy--;
@@ -353,7 +357,7 @@ void editorProcessKeypress() {
 /**************************************************************        init         **************************************************************/
 //function to initialise all the fields in strucutre E for the editor
 void initEditor() {
-    E.cx = E.cy = E.numrows = E.rowoff = 0;
+    E.cx = E.cy = E.numrows = E.rowoff = E.coloff = 0;
     E.row = NULL;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
 }
