@@ -107,7 +107,7 @@ int getWindowSize(int *rows, int *cols) {
     //'winsize' is a structure defined in 'sys/ioctl.h'
     struct winsize ws;
 
-    //ioctl() is used to read read terminal properties and TIOCGWINSZ is argument to get the windows size
+    //ioctl() is used to read terminal properties and TIOCGWINSZ is argument to get the windows size
     //both of these are also defined in 'sys/ioctl.h'
     if(ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
         if(write(STDOUT_FILENO, "\x1b[2024C\x1b[2024B", 14) == -1) return -1;
@@ -156,14 +156,14 @@ void editorDrawRows(struct abuf *ab) {
 void editorRefreshScreen() {
     struct abuf ab = ABUF_INIT;
 
-    //abAppend(&ab, "\x1b[?25l", 6);   //hides the cursor
+    abAppend(&ab, "\x1b[?25l", 6);   //hides the cursor
     abAppend(&ab, "\x1b[2J", 4);     //clear the terminal screen
     abAppend(&ab, "\x1b[H", 3);      //reposition the cursor to the beginning of the screen
     
     editorDrawRows(&ab);             //call editorDrawRows() to draw the tilde on the screen
 
     abAppend(&ab, "\x1b[H", 3);      //reposition the cursor to the beginning of the screen
-    //abAppend(&ab, "\x1b[?25h", 6);   //again turn the cursor on
+    abAppend(&ab, "\x1b[?25h", 6);   //again turn the cursor on
 
     write(STDOUT_FILENO, ab.b, ab.len);
     abFree(&ab);
