@@ -33,7 +33,8 @@ typedef struct erow {
 
 //structure to store the editor configuration
 struct editorConfig {
-    int cx, cy;                        //to keep track of the current position of the cursor
+    int cx, cy;                        //to keep track of the current position of the cursor within the file
+    int rowoff;                        //this will keep track of the row number corresponding to top of the screen 
     int screenrows;                    //number of rows in our current editor configuration
     int screencols;                    //number of columns in our current editor configuration
     int numrows;                       //number of rows (non empty) lines in our file
@@ -233,11 +234,18 @@ void abFree(struct abuf *ab) {
 
 
 /**************************************************************       output        **************************************************************/
+//function to keep track of the row number corresponding to the top of the screen
+void editorScroll() {
+    if(E.cy < E.rowoff) E.rowoff = E.cy;
+    if(E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
+}
+
 //drawing '~' on the left side of the screen after the end of file
 void editorDrawRows(struct abuf *ab) {
     int y;
     for(y = 0; y < E.screenrows; y++) {
-        if(y >= E.numrows) {
+        int filerow = y + E.rowoff;
+        if(filerow >= E.numrows) {
             if(E.numrows == 0 && y == E.screenrows / 3) {
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION);
@@ -253,9 +261,9 @@ void editorDrawRows(struct abuf *ab) {
                 abAppend(ab, "~", 1);
             }
         } else {
-            int len = E.row[y].size;
+            int len = E.row[filerow].size;
             if(len > E.screencols) len = E.screencols;
-            abAppend(ab, E.row[y].chars, len);
+            abAppend(ab, E.row[filerow].chars, len);
         }
 
         abAppend(ab, "\x1b[K", 3);
@@ -266,6 +274,8 @@ void editorDrawRows(struct abuf *ab) {
 
 //function to refresh the screen after each keypress
 void editorRefreshScreen() {
+    editorScroll();
+
     struct abuf ab = ABUF_INIT;
 
     abAppend(&ab, "\x1b[?25l", 6);   //hides the cursor
@@ -274,7 +284,7 @@ void editorRefreshScreen() {
     editorDrawRows(&ab);             //call editorDrawRows() to draw the tilde on the screen
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1, E.cx + 1);
     abAppend(&ab, buf, strlen(buf));
 
     abAppend(&ab, "\x1b[?25h", 6);   //again turn the cursor on
@@ -298,7 +308,7 @@ void editorMoveCursor(int key) {
             if(E.cy != 0) E.cy--;
             break;
         case ARROW_DOWN:
-            if(E.cy != E.screenrows - 1) E.cy++;
+            if(E.cy < E.numrows) E.cy++;
             break;
     }
 }
@@ -343,7 +353,7 @@ void editorProcessKeypress() {
 /**************************************************************        init         **************************************************************/
 //function to initialise all the fields in strucutre E for the editor
 void initEditor() {
-    E.cx = E.cy = E.numrows = 0;
+    E.cx = E.cy = E.numrows = E.rowoff = 0;
     E.row = NULL;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
 }
