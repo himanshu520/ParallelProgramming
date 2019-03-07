@@ -200,15 +200,33 @@ int getWindowSize(int *rows, int *cols) {
 
 
 /************************************************************** syntax highlighting **************************************************************/
+//function that returns boolean value of whether c is a separator or not
+int is_separator(int c) {
+    return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[];", c) != NULL;
+}
+
 //function to update the 'hl' array for a row
 void editorUpdateSyntax(erow *row) {
     row->hl = realloc(row->hl, row->rsize);
-    memset(row->hl, HL_NORMAL, row->rsize);
+    memset(row->hl, HL_NORMAL, row->rsize); //giving a default highlight value to all the charachters
 
-    int i;
-    for(i = 0; i < row->rsize; i++) 
-        if(isdigit(row->render[i]))
+    int prev_sep = 1;   //variable to keep track of whether the previous character was a separator
+
+    int i = 0;
+    while(i < row->rsize) {
+        char c = row->render[i];    //current character
+        unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;   //previous highlight
+
+        if(isdigit(c) && (prev_sep || prev_hl == HL_NUMBER) || (c == '.' && prev_hl == HL_NUMBER)) {
             row->hl[i] = HL_NUMBER;
+            i++;
+            prev_sep = 0;
+            continue;
+        }
+
+        prev_sep = is_separator(c);
+        i++;
+    }
 }
 
 //function to map the values in 'hl' to actual colours
@@ -453,10 +471,21 @@ void editorSave() {
 /**************************************************************         find        **************************************************************/
 //callback function for search used in call to editorPrompt
 void editorFindCallback(char *query, int key) {
-    //static variable to control search of a pattern' within the file
+    //static variable to control search of a pattern within the file
     //last_match stores the line of previous match (-1 if no such line), and direction stores the direction to search (forward/backward)
     static int last_match = -1;
     static int direction = 1;
+
+    //static variables to store the color information of searched text so that it can be restored later after the search
+    static int saved_hl_line;
+    static char *saved_hl = NULL;
+
+    //if there is any saved color information restore it
+    if(saved_hl) {
+        memcpy(E.row[saved_hl_line].hl, saved_hl, E.row[saved_hl_line].rsize);
+        free(saved_hl);
+        saved_hl = NULL;
+    }
 
     if(key == '\r' || key == '\x1b') {
         last_match = -1;
@@ -486,6 +515,12 @@ void editorFindCallback(char *query, int key) {
             E.cy = current;
             E.cx = editorRowRxToCx(row, match - row->render);
             E.rowoff = E.numrows;
+
+            //highlighting the searched text after saving the current colour info
+            saved_hl_line = current;
+            saved_hl = malloc(row->rsize);
+            memcpy(saved_hl, row->hl, row->rsize);
+            memset(&row->hl[match - row->render], HL_MATCH, strlen(query));
             break;
         }
     }
