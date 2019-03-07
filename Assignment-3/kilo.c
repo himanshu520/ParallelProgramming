@@ -23,6 +23,7 @@
 /**************************************************************        defines      **************************************************************/
 #define KILO_VERSION "0.0.1"
 #define KILO_TAB_STOP 8
+#define KILO_QUIT_TIMES 3
 #define CTRL_KEY(k) ((k) & 0x1f)
 
 enum editorKey { BACKSPACE = 127, ARROW_LEFT = 1000, ARROW_RIGHT, ARROW_UP, ARROW_DOWN, DEL_KEY, HOME_KEY, END_KEY, PAGE_UP, PAGE_DOWN };
@@ -45,6 +46,7 @@ struct editorConfig {
     int screencols;                    //number of columns in our current editor configuration
     int numrows;                       //number of rows (non empty) lines in our file
     erow *row;                         //dynamically allocated array that will store the rows of our file
+    int dirty;                         //shows whether the currently opened file in the editor has been modified or not
     char *filename;                    //file currently opened in the text editor
     char statusmsg[80];
     time_t statusmsg_time;
@@ -240,6 +242,7 @@ void editorAppendRow(char *s, size_t len) {
     editorUpdateRow(&E.row[at]);
 
     E.numrows++;
+    E.dirty++;
 }
 
 //this function inserts a single character into an erow at a given position, it doesn't need to worry about where the cursor is
@@ -250,6 +253,7 @@ void editorRowInsertChar(erow *row, int at, int c) {
     row->size++;
     row->chars[at] = c;
     editorUpdateRow(row);
+    E.dirty++;
 }
 
 
@@ -302,6 +306,7 @@ void editorOpen(char *filename) {
     }
     free(line);
     fclose(fp);
+    E.dirty = 0;
 }
 
 //function to save the currently opened file
@@ -317,6 +322,7 @@ void editorSave() {
             if(write(fd, buf, len) == len) {
                 close(fd);
                 free(buf);
+                E.dirty = 0;
                 editorSetStatusMessage("%d bytes written to disk", len);
                 return;
             }
@@ -399,7 +405,7 @@ void editorDrawRows(struct abuf *ab) {
 void editorDrawStatusBar(struct abuf *ab) {
     abAppend(ab, "\x1b[7m", 4);      //for dispalying the status bar with inverted colours
     char status[80], rstatus[80];
-    int len = snprintf(status, sizeof(status), "%.20s - %d lines", E.filename ? E.filename : "[No Name]", E.numrows);
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", E.filename ? E.filename : "[No Name]", E.numrows, E.dirty ? "(modified)" : "");
     int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows);
     if(len > E.screencols) len = E.screencols;
     abAppend(ab, status, len);
@@ -493,6 +499,7 @@ void editorMoveCursor(int key) {
 
 //function to process keypresses
 void editorProcessKeypress() {
+    static int quit_times = KILO_QUIT_TIMES;
     int c = editorReadKey();
 
     switch(c) {
@@ -500,6 +507,11 @@ void editorProcessKeypress() {
             break;
 
         case CTRL_KEY('q'):     
+            if(E.dirty && quit_times > 0) {
+                editorSetStatusMessage("Warning!!! File has unsaved changes. Press Ctrl-Q %d more times to quit", quit_times);
+                quit_times--;
+                return;
+            }
             write(STDOUT_FILENO, "\x1b[2J", 4);     //clear the terminal screen
             write(STDOUT_FILENO, "\x1b[H", 3);      //reposition the cursor to the beginning of the screen
             exit(0);
@@ -551,13 +563,15 @@ void editorProcessKeypress() {
             editorInsertChar(c);
             break;
     }
+
+    quit_times = KILO_QUIT_TIMES;
 }
 
 
 /**************************************************************        init         **************************************************************/
 //function to initialise all the fields in strucutre E for the editor
 void initEditor() {
-    E.cx = E.cy = E.rx = E.numrows = E.rowoff = E.coloff = E.statusmsg_time = 0;
+    E.cx = E.cy = E.rx = E.numrows = E.rowoff = E.coloff = E.statusmsg_time = E.dirty = 0;
     E.row = NULL, E.filename = NULL, E.statusmsg[0] = '\0';
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
     E.screenrows -= 2;
