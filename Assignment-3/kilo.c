@@ -25,12 +25,20 @@
 #define KILO_TAB_STOP 8
 #define KILO_QUIT_TIMES 3
 #define CTRL_KEY(k) ((k) & 0x1f)
+#define HL_HIGHLIGHT_NUMBERS (1 << 0)
 
 enum editorKey { BACKSPACE = 127, ARROW_LEFT = 1000, ARROW_RIGHT, ARROW_UP, ARROW_DOWN, DEL_KEY, HOME_KEY, END_KEY, PAGE_UP, PAGE_DOWN };
 enum editorHighlight { HL_NORMAL = 0, HL_NUMBER, HL_MATCH };
 
 
 /**************************************************************         data        **************************************************************/
+//structure type to store syntax highlighting info for the current file
+struct editorSyntax {
+    char *filetype;     //filetype that will be displayed in the status bar
+    char **filematch;   //it is an arrya of string that contains a pattern to match a filename against
+    int flags;          //it is a bit field that will contain flags for whether to highlight numbers and whether to highlight strings for that filetype
+};
+
 //datatype to store a row of text
 typedef struct erow {
     int size, rsize;
@@ -52,8 +60,15 @@ struct editorConfig {
     char *filename;                    //file currently opened in the text editor
     char statusmsg[80];
     time_t statusmsg_time;
+    struct editorSyntax *syntax;       //structure to store the syntax highlighting info
     struct termios orig_termios;       //we will store the original terminal configurations
 } E;
+
+
+/**************************************************************      file types     **************************************************************/
+char *C_HL_extensions[] = {".c", ".h", ".cpp", NULL};
+
+struct editorSyntax HLDB = { "c", C_HL_extensions, HL_HIGHLIGHT_NUMBERS };
 
 
 /**************************************************************      prototypes     **************************************************************/
@@ -217,7 +232,7 @@ void editorUpdateSyntax(erow *row) {
         char c = row->render[i];    //current character
         unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;   //previous highlight
 
-        if(isdigit(c) && (prev_sep || prev_hl == HL_NUMBER) || (c == '.' && prev_hl == HL_NUMBER)) {
+        if((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || (c == '.' && prev_hl == HL_NUMBER)) {
             row->hl[i] = HL_NUMBER;
             i++;
             prev_sep = 0;
@@ -647,9 +662,10 @@ void editorDrawRows(struct abuf *ab) {
 //function to display the status bar
 void editorDrawStatusBar(struct abuf *ab) {
     abAppend(ab, "\x1b[7m", 4);      //for dispalying the status bar with inverted colours
+    
     char status[80], rstatus[80];
     int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", E.filename ? E.filename : "[No Name]", E.numrows, E.dirty ? "(modified)" : "");
-    int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows);
+    int rlen = snprintf(rstatus, sizeof(rstatus), "%s | %d/%d", E.syntax ? E.syntax->filetype : "no fit", E.cy + 1, E.numrows);
     if(len > E.screencols) len = E.screencols;
     abAppend(ab, status, len);
     while(len < E.screencols) {
@@ -863,6 +879,7 @@ void editorProcessKeypress() {
 void initEditor() {
     E.cx = E.cy = E.rx = E.numrows = E.rowoff = E.coloff = E.statusmsg_time = E.dirty = 0;
     E.row = NULL, E.filename = NULL, E.statusmsg[0] = '\0';
+    E.syntax = NULL;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
     E.screenrows -= 2;
 }
