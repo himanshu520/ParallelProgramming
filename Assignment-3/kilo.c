@@ -7,6 +7,7 @@
 
 #include<ctype.h>
 #include<errno.h>
+#include<fcntl.h>
 #include<stdarg.h>
 #include<stdio.h>
 #include<stdlib.h>
@@ -24,7 +25,7 @@
 #define KILO_TAB_STOP 8
 #define CTRL_KEY(k) ((k) & 0x1f)
 
-enum editorKey { ARROW_LEFT = 1000, ARROW_RIGHT, ARROW_UP, ARROW_DOWN, DEL_KEY, HOME_KEY, END_KEY, PAGE_UP, PAGE_DOWN };
+enum editorKey { BACKSPACE = 127, ARROW_LEFT = 1000, ARROW_RIGHT, ARROW_UP, ARROW_DOWN, DEL_KEY, HOME_KEY, END_KEY, PAGE_UP, PAGE_DOWN };
 
 
 /**************************************************************         data        **************************************************************/
@@ -49,6 +50,10 @@ struct editorConfig {
     time_t statusmsg_time;
     struct termios orig_termios;       //we will store the original terminal configurations
 } E;
+
+
+/**************************************************************      prototypes     **************************************************************/
+void editorSetStatusMessage(const char *fmt, ...);
 
 
 /**************************************************************       terminal      **************************************************************/
@@ -237,8 +242,49 @@ void editorAppendRow(char *s, size_t len) {
     E.numrows++;
 }
 
+//this function inserts a single character into an erow at a given position, it doesn't need to worry about where the cursor is
+void editorRowInsertChar(erow *row, int at, int c) {
+    if(at <  0 || at > row->size) at = row->size;
+    row->chars = realloc(row->chars, row->size + 2);
+    memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
+    row->size++;
+    row->chars[at] = c;
+    editorUpdateRow(row);
+}
+
+
+/**************************************************************  editor operations  **************************************************************/
+//function to add a new character at the cursor position, it doesn't have to worry about the details of modifying erow
+void editorInsertChar(int c) {
+    //first check if the cursor is at the next line of the eof
+    if(E.cy == E.numrows) editorAppendRow("", 0);
+    editorRowInsertChar(&E.row[E.cy], E.cx, c);
+    E.cx++;
+}
+
 
 /**************************************************************       file io       **************************************************************/
+//function for converting rows to a single string
+//the function returns a pointer to the dynamically allocated character array that stores the file
+char* editorRowsToString(int *buflen) {
+    int totlen = 0;
+    int j;
+    for(j = 0; j < E.numrows; j++)
+        totlen += E.row[j].size + 1;
+    *buflen = totlen;
+
+    char *buf = malloc(totlen);
+    char *p = buf;
+    for(j = 0; j < E.numrows; j++) {
+        memcpy(p, E.row[j].chars, E.row[j].size);
+        p += E.row[j].size;
+        *p = '\n';
+        p++;
+    }
+
+    return buf;
+}
+
 //function for opening and reading files from disk
 void editorOpen(char *filename) {
     free(E.filename);
@@ -256,6 +302,29 @@ void editorOpen(char *filename) {
     }
     free(line);
     fclose(fp);
+}
+
+//function to save the currently opened file
+void editorSave() {
+    if(E.filename == NULL) return;
+
+    int len;
+    char *buf = editorRowsToString(&len);
+
+    int fd = open(E.filename, O_RDWR | O_CREAT, 0644);  //because we are creating a new file, we would have to pass on permission for the file (here it is 0644)
+    if(fd != -1) {
+        if(ftruncate(fd, len) != -1)
+            if(write(fd, buf, len) == len) {
+                close(fd);
+                free(buf);
+                editorSetStatusMessage("%d bytes written to disk", len);
+                return;
+            }
+        close(fd);       
+    }
+
+    free(buf);
+    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));   //here strerror() function prints the error message corresponding to errno
 }
 
 
@@ -427,10 +496,17 @@ void editorProcessKeypress() {
     int c = editorReadKey();
 
     switch(c) {
+        case '\r':
+            break;
+
         case CTRL_KEY('q'):     
             write(STDOUT_FILENO, "\x1b[2J", 4);     //clear the terminal screen
             write(STDOUT_FILENO, "\x1b[H", 3);      //reposition the cursor to the beginning of the screen
             exit(0);
+            break;
+
+        case CTRL_KEY('s'):
+            editorSave();
             break;
         
         case HOME_KEY:
@@ -440,6 +516,11 @@ void editorProcessKeypress() {
         case END_KEY:
             if(E.cy < E.numrows)
                 E.cx = E.row[E.cy].size;
+            break;
+
+        case BACKSPACE:                             //BACKSPACE is mapped to ASCII 127
+        case CTRL_KEY('h'):                         //CTRL_KEY('h') is ASCII 8, which was originally for BAACKSPACE
+        case DEL_KEY:                               //DEL_KEY is mapped to <esc>[3~
             break;
 
         case PAGE_UP:
@@ -461,6 +542,14 @@ void editorProcessKeypress() {
         case ARROW_RIGHT:
             editorMoveCursor(c);
             break;
+
+        case CTRL_KEY('l'):                         //we would be ignoring CTRL_KEY('l') and ESCAPE as the screen refreshes (the tradational use of these keys) after any keypress
+        case '\x1b':
+            break;
+
+        default:
+            editorInsertChar(c);
+            break;
     }
 }
 
@@ -481,7 +570,7 @@ int main(int argc, char **argv) {
     initEditor();
     if(argc >= 2) editorOpen(argv[1]);
     
-    editorSetStatusMessage("Help: Ctrl-Q = quit");
+    editorSetStatusMessage("Help: Ctrl-S = save | Ctrl-Q = quit");
 
     while(1) {
         editorRefreshScreen();
