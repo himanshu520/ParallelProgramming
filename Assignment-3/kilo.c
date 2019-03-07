@@ -227,11 +227,13 @@ void editorUpdateRow(erow *row) {
     row->rsize = idx;
 }
 
-//this function will append a string to the E.row sturcture
-void editorAppendRow(char *s, size_t len) {
-    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+//this function will insert a new row for a string string to the E.row array
+void editorInsertRow(int at, char *s, size_t len) {
+    if(at < 0 || at > E.numrows) return;
 
-    int at = E.numrows;
+    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+    memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at));
+
     E.row[at].size = len;
     E.row[at].chars = malloc(len + 1);
     memcpy(E.row[at].chars, s, len);
@@ -242,6 +244,21 @@ void editorAppendRow(char *s, size_t len) {
     editorUpdateRow(&E.row[at]);
 
     E.numrows++;
+    E.dirty++;
+}
+
+//function to free an erow
+void editorFreeRow(erow *row) {
+    free(row->render);
+    free(row->chars);
+}
+
+//function to delete a row, it frees the current row and moves the next row to the current row
+void editorDelRow(int at) {
+    if(at < 0 || at >= E.numrows) return;
+    editorFreeRow(&E.row[at]);
+    memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1));
+    E.numrows--;
     E.dirty++;
 }
 
@@ -256,14 +273,64 @@ void editorRowInsertChar(erow *row, int at, int c) {
     E.dirty++;
 }
 
+//function to append a string to the end of a row
+void editorRowAppendString(erow *row, char *s, size_t len) {
+    row->chars = realloc(row->chars, row->size + len + 1);
+    memcpy(&row->chars[row->size], s, len);
+    row->size += len;
+    row->chars[row->size] = '\0';
+    editorUpdateRow(row);
+    E.dirty++;
+}
+
+//function to delete a character from an erow
+void editorRowDelChar(erow *row, int at) {
+    if(at < 0 || at >= row->size) return;
+    memmove(&row->chars[at], &row->chars[at + 1], row->size - at);
+    row->size--;
+    editorUpdateRow(row);
+    E.dirty++;
+}
 
 /**************************************************************  editor operations  **************************************************************/
 //function to add a new character at the cursor position, it doesn't have to worry about the details of modifying erow
 void editorInsertChar(int c) {
     //first check if the cursor is at the next line of the eof
-    if(E.cy == E.numrows) editorAppendRow("", 0);
+    if(E.cy == E.numrows) editorInsertRow(E.numrows, "", 0);
     editorRowInsertChar(&E.row[E.cy], E.cx, c);
     E.cx++;
+}
+
+//function to insert a newline
+void editorInsertNewLine() {
+    if(E.cx == 0) editorInsertRow(E.cy, "", 0);
+    else {
+        erow *row = &E.row[E.cy];
+        editorInsertRow(E.cy + 1, &row->chars[E.cx], row->size - E.cx);
+        row = &E.row[E.cy];
+        row->size = E.cx;
+        row->chars[row->size] = '\0';
+        editorUpdateRow(row);
+    }
+    E.cy++;
+    E.cx = 0;
+}
+
+//function to delete a character from the cursor position
+void editorDelChar() {
+    if(E.cy == E.numrows) return;
+    if(E.cx == 0 && E.cy == 0) return;
+
+    erow *row = &E.row[E.cy];
+    if(E.cx > 0) {
+        editorRowDelChar(row, E.cx - 1);
+        E.cx--;
+    } else {
+        E.cx = E.row[E.cy - 1].size;
+        editorRowAppendString(&E.row[E.cy - 1], row->chars, row->size);
+        editorDelRow(E.cy);
+        E.cy--;
+    }
 }
 
 
@@ -302,7 +369,7 @@ void editorOpen(char *filename) {
     ssize_t linelen;
     while((linelen = getline(&line, &linecap, fp)) != -1) {
         while(linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) linelen--;
-        editorAppendRow(line, linelen);
+        editorInsertRow(E.numrows, line, linelen);
     }
     free(line);
     fclose(fp);
@@ -504,6 +571,7 @@ void editorProcessKeypress() {
 
     switch(c) {
         case '\r':
+            editorInsertNewLine();
             break;
 
         case CTRL_KEY('q'):     
@@ -533,6 +601,8 @@ void editorProcessKeypress() {
         case BACKSPACE:                             //BACKSPACE is mapped to ASCII 127
         case CTRL_KEY('h'):                         //CTRL_KEY('h') is ASCII 8, which was originally for BAACKSPACE
         case DEL_KEY:                               //DEL_KEY is mapped to <esc>[3~
+            if(c == DEL_KEY) editorMoveCursor(ARROW_RIGHT);
+            editorDelChar();
             break;
 
         case PAGE_UP:
