@@ -57,7 +57,7 @@ struct editorConfig {
 /**************************************************************      prototypes     **************************************************************/
 void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
-char* editorPrompt(char *prompt);
+char* editorPrompt(char *prompt, void (*callback)(char *, int));
 
 
 /**************************************************************       terminal      **************************************************************/
@@ -207,6 +207,20 @@ int editorRowCxToRx(erow *row, int cx) {
         rx++;
     }
     return rx;
+}
+
+//function that converts 'render' index to 'chars' index
+int editorRowRxToCx(erow *row, int rx) {
+    int cur_rx = 0;
+    int cx;
+    for(cx = 0; cx < row->size; cx++) {
+        if(row->chars[cx] == '\t')
+            cur_rx += (KILO_TAB_STOP - 1) - (cur_rx % KILO_TAB_STOP);
+        cur_rx++;
+
+        if(cur_rx > rx) return cx;
+    }
+    return cx;  //in case the caller provieds an rx that's out of range, which shouldn't happen
 }
 
 //this function will update render field of a 'erow' from its 'chars' field
@@ -381,7 +395,7 @@ void editorOpen(char *filename) {
 //function to save the currently opened file
 void editorSave() {
     if(E.filename == NULL) {
-        E.filename = editorPrompt("Save as: %s");
+        E.filename = editorPrompt("Save as: %s", NULL);
         if(E.filename == NULL) {
             editorSetStatusMessage("Save aborted");
             return;
@@ -406,6 +420,69 @@ void editorSave() {
 
     free(buf);
     editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));   //here strerror() function prints the error message corresponding to errno
+}
+
+
+/**************************************************************         find        **************************************************************/
+//callback function for search used in call to editorPrompt
+void editorFindCallback(char *query, int key) {
+    //static variable to control search of a pattern' within the file
+    //last_match stores the line of previous match (-1 if no such line), and direction stores the direction to search (forward/backward)
+    static int last_match = -1;
+    static int direction = 1;
+
+    if(key == '\r' || key == '\x1b') {
+        last_match = -1;
+        direction = 1;
+        return;
+    } else if(key == ARROW_RIGHT || key == ARROW_DOWN) direction = 1;
+    else if(key == ARROW_LEFT || key == ARROW_UP) direction = -1;
+    else {
+        last_match = -1;
+        direction = 1;
+    }
+
+    if(last_match == -1) direction = 1;
+    int current = last_match, i;
+
+    for(i = 0; i < E.numrows; i++) {
+        current += direction;
+
+        //the search wraps around the file if we have reached end or the starting of the file
+        if(current == -1) current = E.numrows - 1;
+        else if(current == E.numrows) current = 0;
+
+        erow *row = &E.row[current];
+        char *match = strstr(row->render, query);
+        if(match) {
+            last_match = current;
+            E.cy = current;
+            E.cx = editorRowRxToCx(row, match - row->render);
+            E.rowoff = E.numrows;
+            break;
+        }
+    }
+}
+
+//function to search for a word in the editor
+void editorFind() {
+    //saving the current position of the cursor, so as to restore it incase user cancels the search
+    int saved_cx = E.cx;
+    int saved_cy = E.cy;
+    int saved_coloff = E.coloff;
+    int saved_rowoff = E.rowoff;
+    
+    //prompting for input for search, and performing the search
+    char *query = editorPrompt("Search: %s (Use ESC/ARROW/Enter)", editorFindCallback);
+
+    //if search was successfully completed, freeing the user's input buffer else restoring the cursor position from stored info
+    if(query) free(query);
+    else {
+        E.cx = saved_cx;
+        E.cy = saved_cy;
+        E.coloff = saved_coloff;
+        E.rowoff = saved_rowoff;
+    }
 }
 
 
@@ -541,7 +618,7 @@ void editorSetStatusMessage(const char *fmt, ...) {
 /**************************************************************        input        **************************************************************/
 //function to prompt the user for an input. The string to be displayed as prompt is passed as an argument
 //'prompt' is supposed to be a format string containing %s, where user input will be displayed
-char* editorPrompt(char *prompt) {
+char* editorPrompt(char *prompt, void (*callback)(char *, int)) {
     size_t bufsize = 128;
     char *buf = malloc(bufsize);
 
@@ -557,11 +634,13 @@ char* editorPrompt(char *prompt) {
             if(buflen != 0) buf[--buflen] = '\0';
         } else if(c == '\x1b') {
             editorSetStatusMessage("");
+            if(callback) callback(buf, c);
             free(buf);
             return NULL;
         } else if(c == '\r') {
             if(buflen != 0) {
                 editorSetStatusMessage("");
+                if(callback) callback(buf, c);
                 return buf;
             }
         } else if(!iscntrl(c) && c < 128) {
@@ -572,6 +651,8 @@ char* editorPrompt(char *prompt) {
             buf[buflen++] = c;
             buf[buflen] = '\0';
         }
+
+        if(callback) callback(buf, c);
     }
 }
 
@@ -642,6 +723,10 @@ void editorProcessKeypress() {
                 E.cx = E.row[E.cy].size;
             break;
 
+        case CTRL_KEY('f'):
+            editorFind();
+            break;
+
         case BACKSPACE:                             //BACKSPACE is mapped to ASCII 127
         case CTRL_KEY('h'):                         //CTRL_KEY('h') is ASCII 8, which was originally for BAACKSPACE
         case DEL_KEY:                               //DEL_KEY is mapped to <esc>[3~
@@ -698,7 +783,7 @@ int main(int argc, char **argv) {
     initEditor();
     if(argc >= 2) editorOpen(argv[1]);
     
-    editorSetStatusMessage("Help: Ctrl-S = save | Ctrl-Q = quit");
+    editorSetStatusMessage("Help: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
 
     while(1) {
         editorRefreshScreen();
