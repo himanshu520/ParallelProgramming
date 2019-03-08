@@ -26,9 +26,10 @@
 #define KILO_QUIT_TIMES 3
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define HL_HIGHLIGHT_NUMBERS (1 << 0)
+#define HL_HIGHLIGHT_STRINGS (1 << 1)
 
 enum editorKey { BACKSPACE = 127, ARROW_LEFT = 1000, ARROW_RIGHT, ARROW_UP, ARROW_DOWN, DEL_KEY, HOME_KEY, END_KEY, PAGE_UP, PAGE_DOWN };
-enum editorHighlight { HL_NORMAL = 0, HL_NUMBER, HL_MATCH };
+enum editorHighlight { HL_NORMAL = 0, HL_COMMENT, HL_STRING, HL_NUMBER, HL_MATCH };
 
 
 /**************************************************************         data        **************************************************************/
@@ -36,6 +37,7 @@ enum editorHighlight { HL_NORMAL = 0, HL_NUMBER, HL_MATCH };
 struct editorSyntax {
     char *filetype;     //filetype that will be displayed in the status bar
     char **filematch;   //it is an arrya of string that contains a pattern to match a filename against
+    char *singleline_comment_start; //stores the starting characters of a single line comment
     int flags;          //it is a bit field that will contain flags for whether to highlight numbers and whether to highlight strings for that filetype
 };
 
@@ -68,7 +70,7 @@ struct editorConfig {
 /**************************************************************      file types     **************************************************************/
 char *C_HL_extensions[] = {".c", ".h", ".cpp", NULL};
 
-struct editorSyntax HLDB[] = {{ "c", C_HL_extensions, HL_HIGHLIGHT_NUMBERS }};
+struct editorSyntax HLDB[] = {{ "c", C_HL_extensions, "//", (HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS) }};
 
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
 
@@ -229,14 +231,54 @@ void editorUpdateSyntax(erow *row) {
 
     if(E.syntax == NULL) return;    //check if any syntax highlighting is to be done
 
+    char *scs = E.syntax->singleline_comment_start;
+    int scs_len = scs ? strlen(scs) : 0;
+
     int prev_sep = 1;   //variable to keep track of whether the previous character was a separator
+    int in_string = 0;  //variable to keep track of whether we are currently inside a string or not 
+    //in_string stores '"' or '\'' depending on whether we entered a charcter or string
 
     int i = 0;
     while(i < row->rsize) {
         char c = row->render[i];    //current character
         unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;   //previous highlight
 
-        //check if numbers are to be highlighted
+        //check if comments are to be highlighted and there is start of comment from the current position in the row
+        //if so set highlighting for the remaining row to be that of comment and break the loop
+        if(scs_len && !in_string) {
+            if(!strncmp(&row->render[i], scs, scs_len)) {
+                memset(&row->hl[i], HL_COMMENT, row->rsize - i);
+                break;
+            }
+        }
+
+        //check if strings are to be highlighted, if so highlight them
+        if(E.syntax->flags & HL_HIGHLIGHT_STRINGS) {
+            if(in_string) {
+                row->hl[i] = HL_STRING;
+
+                //checking for escape sequence
+                if(c == '\\' && i + 1 < row->rsize) {
+                    row->hl[i + 1] = HL_STRING;
+                    i += 2;
+                    continue;
+                }
+
+                if(c == in_string) in_string = 0;
+                i++;
+                prev_sep = 1;
+                continue;
+            } else {
+                if(c == '"' || c == '\'') {
+                    in_string = c;
+                    row->hl[i] = HL_STRING;
+                    i++;
+                    continue;
+                }
+            }
+        }
+
+        //check if numbers are to be highlighted, if so highlight them
         if(E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
             if((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || (c == '.' && prev_hl == HL_NUMBER)) {
                 row->hl[i] = HL_NUMBER;
@@ -254,6 +296,8 @@ void editorUpdateSyntax(erow *row) {
 //function to map the values in 'hl' to actual colours
 int editorSyntaxToColor(int hl) {
     switch(hl) {
+        case HL_COMMENT:return 36;          //foreground cyan
+        case HL_STRING: return 35;          //foreground magenta
         case HL_NUMBER: return 31;          //foreground red
         case HL_MATCH: return 34;           //foreground blue
         default: return 37;                 //foreground white  
