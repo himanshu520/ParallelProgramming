@@ -46,9 +46,10 @@ struct editorSyntax {
 
 //datatype to store a row of text
 typedef struct erow {
-    int size, rsize;
+    int size, rsize, idx;              //idx is the index of the row within the file
     char *chars, *render;              //pointer to a dynamically allocated character array representing actual row of text and the text to display
     unsigned char *hl;                 //pointer to an array storing the syntax highlighting details of each character of the current row
+    int hl_open_comment;               //variable indicating whether the current row ended with an unclosed multiline comment
 } erow;
 
 //structure to store the editor configuration
@@ -249,7 +250,9 @@ void editorUpdateSyntax(erow *row) {
     int prev_sep = 1;   //variable to keep track of whether the previous character was a separator
     int in_string = 0;  //variable to keep track of whether we are currently inside a string or not 
     //in_string stores '"' or '\'' depending on whether we entered a charcter or string
-    int in_comment = 0; //variable to keep track of whether we are currently inside a multiline comment or not
+    int in_comment = (row->idx > 0 && E.row[row->idx - 1].hl_open_comment);
+    //variable to keep track of whether we are currently inside a multiline comment or not
+    //it is initialised depending on whether the previous row ended with an open multiline comment
 
     int i = 0;
     while(i < row->rsize) {
@@ -258,7 +261,7 @@ void editorUpdateSyntax(erow *row) {
 
         //check if comments are to be highlighted and there is start of singleline comment from the current position in the row
         //if so set highlighting for the remaining row to be that of comment and break the loop
-        if(scs_len && !in_string) {
+        if(scs_len && !in_string && !in_comment) {
             if(!strncmp(&row->render[i], scs, scs_len)) {
                 memset(&row->hl[i], HL_COMMENT, row->rsize - i);
                 break;
@@ -348,6 +351,14 @@ void editorUpdateSyntax(erow *row) {
         prev_sep = is_separator(c);
         i++;
     }
+
+    //updating the 'hl_open_comment' field of the current row
+    //also checking if the current row was changed from being commented to uncommented and vice versa
+    //if so calling the function recursively for the next row (as such commenting could effect multiple rows, so we should update all such rows not just the current row)
+    int changed = (row->hl_open_comment != in_comment);
+    row->hl_open_comment = in_comment;
+    if(changed && row->idx + 1 < E.numrows)
+        editorUpdateSyntax(&E.row[row->idx + 1]);
 }
 
 //function to map the values in 'hl' to actual colours
@@ -447,6 +458,10 @@ void editorInsertRow(int at, char *s, size_t len) {
 
     E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
     memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at));
+    for(int j = at + 1; j < E.numrows; j++)
+        E.row[j].idx++;
+
+    E.row[at].idx = at;
 
     E.row[at].size = len;
     E.row[at].chars = malloc(len + 1);
@@ -456,6 +471,7 @@ void editorInsertRow(int at, char *s, size_t len) {
     E.row[at].rsize = 0;
     E.row[at].render = NULL;
     E.row[at].hl = NULL;
+    E.row[at].hl_open_comment = 0;
     editorUpdateRow(&E.row[at]);
 
     E.numrows++;
