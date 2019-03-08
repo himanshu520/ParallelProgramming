@@ -68,7 +68,9 @@ struct editorConfig {
 /**************************************************************      file types     **************************************************************/
 char *C_HL_extensions[] = {".c", ".h", ".cpp", NULL};
 
-struct editorSyntax HLDB = { "c", C_HL_extensions, HL_HIGHLIGHT_NUMBERS };
+struct editorSyntax HLDB[] = {{ "c", C_HL_extensions, HL_HIGHLIGHT_NUMBERS }};
+
+#define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
 
 
 /**************************************************************      prototypes     **************************************************************/
@@ -225,6 +227,8 @@ void editorUpdateSyntax(erow *row) {
     row->hl = realloc(row->hl, row->rsize);
     memset(row->hl, HL_NORMAL, row->rsize); //giving a default highlight value to all the charachters
 
+    if(E.syntax == NULL) return;    //check if any syntax highlighting is to be done
+
     int prev_sep = 1;   //variable to keep track of whether the previous character was a separator
 
     int i = 0;
@@ -232,11 +236,14 @@ void editorUpdateSyntax(erow *row) {
         char c = row->render[i];    //current character
         unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;   //previous highlight
 
-        if((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || (c == '.' && prev_hl == HL_NUMBER)) {
-            row->hl[i] = HL_NUMBER;
-            i++;
-            prev_sep = 0;
-            continue;
+        //check if numbers are to be highlighted
+        if(E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
+            if((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || (c == '.' && prev_hl == HL_NUMBER)) {
+                row->hl[i] = HL_NUMBER;
+                i++;
+                prev_sep = 0;
+                continue;
+            }
         }
 
         prev_sep = is_separator(c);
@@ -252,6 +259,34 @@ int editorSyntaxToColor(int hl) {
         default: return 37;                 //foreground white  
     }
 }
+
+//function that updates the 'E.syntax' field based on the file extension
+void editorSelectSyntaxHighlight() {
+    E.syntax = NULL;
+    if(E.filename == NULL) return;
+
+    char *ext = strchr(E.filename, '.');    //strchr() matches the last occurence of '.' in E.filename
+
+    for(unsigned int j = 0; j < HLDB_ENTRIES; j++) {
+        struct editorSyntax *s = &HLDB[j];
+        unsigned int i = 0;
+        while(s->filematch[i]) {
+            int is_ext = (s->filematch[i][0] == '.');
+            if((is_ext && ext && !strcmp(ext, s->filematch[i])) || (!is_ext && strstr(E.filename, s->filematch[i]))) {
+                E.syntax = s;
+
+                //updating the highlighting of the current file
+                int filerow;
+                for(filerow = 0; filerow < E.numrows; filerow++)
+                    editorUpdateSyntax(&E.row[filerow]);
+                
+                return;
+            }
+            i++;
+        }
+    }
+}
+
 
 /**************************************************************   row operations    **************************************************************/
 //function that converts 'chars' index to 'render' index
@@ -437,6 +472,8 @@ void editorOpen(char *filename) {
     free(E.filename);
     E.filename = strdup(filename);
 
+    editorSelectSyntaxHighlight();
+
     FILE *fp = fopen(filename, "r");
     if(!fp) die("open");
 
@@ -455,11 +492,12 @@ void editorOpen(char *filename) {
 //function to save the currently opened file
 void editorSave() {
     if(E.filename == NULL) {
-        E.filename = editorPrompt("Save as: %s", NULL);
+        E.filename = editorPrompt("Save as: %s (ESC to cancel)", NULL);
         if(E.filename == NULL) {
             editorSetStatusMessage("Save aborted");
             return;
         }
+        editorSelectSyntaxHighlight();
     }
 
     int len;
