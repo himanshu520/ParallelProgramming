@@ -33,14 +33,14 @@ enum editorHighlight { HL_NORMAL = 0, HL_COMMENT, HL_MLCOMMENT, HL_KEYWORD1, HL_
 
 
 /**************************************************************         data        **************************************************************/
-//structure type to store syntax highlighting info for the current file
+//structure type to store syntax highlighting info for the different files
 struct editorSyntax {
-    char *filetype;     //filetype that will be displayed in the status bar
+    char *filetype;     //filetype that will be displayed in the status bar (a string)
     char **filematch;   //it is an array of strings that contains a pattern to match a filename against
     char **keywords;    //it is an array of strings that contains common C keywords and datatypes
-    char *singleline_comment_start; //stores the starting characters of a single line comment
-    char *multiline_comment_start;  //stores the starting characters of a multi line string
-    char *multiline_comment_end;    //stores the ending characters of a multi line string
+    char *singleline_comment_start; //stores the starting characters of a single line comment (a string)
+    char *multiline_comment_start;  //stores the starting characters of a multi line string (a string)
+    char *multiline_comment_end;    //stores the ending characters of a multi line string (a string)
     int flags;          //it is a bit field that will contain flags for whether to highlight numbers and whether to highlight strings for that filetype
 };
 
@@ -92,20 +92,22 @@ char* editorPrompt(char *prompt, void (*callback)(char *, int));
 void die(const char *error_message) {
     write(STDOUT_FILENO, "\x1b[2J", 4);     //clear the terminal screen
     write(STDOUT_FILENO, "\x1b[H", 3);      //reposition the cursor to the beginning of the screen
-    perror(error_message);
+    perror(error_message);                  //perror prints a descriptive error message (including argument string which precedes detailed message)
+                                            //by looking at the global error number set by the failing function
     exit(1);
 }
 
 //function to disable the raw mode upon exit
 void disableRawMode() {
     if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios) == -1) die("tcsetattr");
+    //TCSAFLUSH is meant to flush the buffers both input and output before setting the new attributes
 }
 
 //function to enable the raw mode upon starting the text editor
 void enableRawMode() {
     //reading the original terminal configuration, we will use it to restore the terminal when the program exits
     if(tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) die("tcgetattr");
-    //this function will be called whenever the program exits
+    //this function will be called whenever the program terminates normally
     atexit(disableRawMode);
     
     
@@ -115,13 +117,15 @@ void enableRawMode() {
     //(ICANON) disabling the canonical mode
     //(ISIG) stops the normal functions of ^C and ^Z
     //(IEXTEN) is for ^V (it allows us to send a character literally when pressed after it, eg - ^V^C won't terminate program but send ^C as input)
-    raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN | INPCK | ISTRIP | BRKINT);
+    //INPCK, ISTRIP, BRKINT are not of much significant to modern terminals 
+    raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN | INPCK | ISTRIP | BRKINT);          //local flag
     //(IXON) truning off ^S and ^Q (they allow us to stop the program from sending data to the terminal and resume it)
     //(ICRNL) turning off the conversion of ^M and enter to newline, and make them convert to carriage return ie ASCII 13
-    raw.c_iflag &= ~(IXON | ICRNL);
+    raw.c_iflag &= ~(IXON | ICRNL);                                                     //input flag
     //(OPOST) turning off all the terminal output processing
-    raw.c_oflag &= ~(OPOST);
-    raw.c_cflag &= ~(CS8);
+    //CS8 is of not much significant
+    raw.c_oflag &= ~(OPOST);                                                            //output flag
+    raw.c_cflag &= ~(CS8);                                                              //control flag
     //minimum bytes to be read by read() before returning
     raw.c_cc[VMIN] = 0;
     //timeout for which read waits for terminal input before returning (here we set it to 1/10th of a second)
@@ -214,6 +218,10 @@ int getWindowSize(int *rows, int *cols) {
     //ioctl() is used to read terminal properties and TIOCGWINSZ is argument to get the windows size
     //both of these are also defined in 'sys/ioctl.h'
     if(ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+        //fallback method when ioctl fails
+        //first move the cursor to the bottom right corner and then get the cursor position
+        //C is for cursor to move forward specified number of steps and B is for the cursor to move downwards
+        //C and B also ensures that the cursor doesn't move outside the screen, so passing large numbers is safe here
         if(write(STDOUT_FILENO, "\x1b[2024C\x1b[2024B", 14) == -1) return -1;
         return getCursorPosition(rows, cols);
     } else {
@@ -365,7 +373,7 @@ void editorUpdateSyntax(erow *row) {
 int editorSyntaxToColor(int hl) {
     switch(hl) {
         case HL_COMMENT:
-        case HL_MLCOMMENT:     return 36;          //foreground cyan
+        case HL_MLCOMMENT:      return 36;          //foreground cyan
         case HL_KEYWORD1:       return 33;          //foreground yellow
         case HL_KEYWORD2:       return 32;          //foreground greed
         case HL_STRING:         return 35;          //foreground magenta
@@ -452,7 +460,7 @@ void editorUpdateRow(erow *row) {
     editorUpdateSyntax(row);
 }
 
-//this function will insert a new row for a string string to the E.row array
+//this function will insert a new row for a string to the E.row array
 void editorInsertRow(int at, char *s, size_t len) {
     if(at < 0 || at > E.numrows) return;
 
@@ -494,6 +502,7 @@ void editorDelRow(int at) {
 }
 
 //this function inserts a single character into an erow at a given position, it doesn't need to worry about where the cursor is
+//note that here we have added 2, because we have to allocate space for the null byte also, which is not counted in row->size
 void editorRowInsertChar(erow *row, int at, int c) {
     if(at <  0 || at > row->size) at = row->size;
     row->chars = realloc(row->chars, row->size + 2);
@@ -744,9 +753,9 @@ void abFree(struct abuf *ab) {
 
 
 /**************************************************************       output        **************************************************************/
-//function to keep track of the row number corresponding to the top of the screen
+//function to keep track of the row and column numbers corresponding to the top and left edges of the screen
 void editorScroll() {
-    //setting E.rx to its correct value
+    //setting E.rx to its correct value from the values of E.cx and E.cy
     E.rx = 0;
     if(E.cy < E.numrows)
         E.rx = editorRowCxToRx(&E.row[E.cy], E.cx);
@@ -869,7 +878,7 @@ void editorRefreshScreen() {
     abAppend(&ab, "\x1b[?25l", 6);   //hides the cursor
     abAppend(&ab, "\x1b[H", 3);      //reposition the cursor to the beginning of the screen
     
-    editorDrawRows(&ab);             //call editorDrawRows() to draw the tilde on the screen
+    editorDrawRows(&ab);             //call editorDrawRows() to write the text/tilde in abuf structure to be displayed on the screen
     editorDrawStatusBar(&ab);        //call editorDrawStatusBar() to draw the status bar
     editorDrawMessageBar(&ab);       //call editorDrawMessageBar() to draw the message bar
 
@@ -894,7 +903,7 @@ void editorSetStatusMessage(const char *fmt, ...) {
 
 /**************************************************************        input        **************************************************************/
 //function to prompt the user for an input. The string to be displayed as prompt is passed as an argument
-//'prompt' is supposed to be a format string containing %s, where user input will be displayed
+//'prompt' is supposed to be a format string containing %s, where user's input will be displayed
 char* editorPrompt(char *prompt, void (*callback)(char *, int)) {
     size_t bufsize = 128;
     char *buf = malloc(bufsize);
@@ -1005,7 +1014,7 @@ void editorProcessKeypress() {
             break;
 
         case BACKSPACE:                             //BACKSPACE is mapped to ASCII 127
-        case CTRL_KEY('h'):                         //CTRL_KEY('h') is ASCII 8, which was originally for BAACKSPACE
+        case CTRL_KEY('h'):                         //CTRL_KEY('h') is ASCII 8, which was originally for BACKSPACE
         case DEL_KEY:                               //DEL_KEY is mapped to <esc>[3~
             if(c == DEL_KEY) editorMoveCursor(ARROW_RIGHT);
             editorDelChar();
