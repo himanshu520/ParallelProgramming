@@ -13,10 +13,11 @@
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
+#include <sys/file.h>
+#include<sys/ioctl.h>
 #include<sys/types.h>
 #include<unistd.h>
 #include<termios.h>
-#include<sys/ioctl.h>
 #include<time.h>
 #include<unistd.h>
 
@@ -52,20 +53,24 @@ typedef struct erow {
     char *chars, *render;              //pointer to a dynamically allocated character array representing actual row of text and the text to display
     unsigned char *hl;                 //pointer to an array storing the syntax highlighting details of each character of the current row
     int hl_open_comment;               //variable indicating whether the current row ended with an unclosed multiline comment
-    pthread_mutex_t erow_mutex;        //mutex for accessing an erow
+    pthread_rwlock_t erow_lock;        //mutex for accessing an erow
 } erow;
 
 //structure to store the editor configuration
 struct editorConfig {
     int cx, cy;                        //to keep track of the current position of the cursor within the file
     int rx;                            //to keep track of column number in the actually rendered text on the screen (cx <= rx)
+    pthread_rwlock_t pos_lock;         //mutex for cx, rx, cy
     int rowoff;                        //this will keep track of the row number corresponding to top of the screen 
     int coloff;                        //this will keep track of the column number corresponding to left edge of the screen
+    pthread_rwlock_t offset_lock;      //mutex for rowoff and coloff
     int screenrows;                    //number of rows in our current editor configuration
     int screencols;                    //number of columns in our current editor configuration
     int numrows;                       //number of rows (non empty) lines in our file
     erow *row;                         //dynamically allocated array that will store the rows of our file
+    pthread_rwlock_t row_lock;         //mutex for numrows and row.
     int dirty;                         //shows whether the currently opened file in the editor has been modified or not
+    pthread_rwlock_t dirty_lock;       //mutex for dirty flag
     char *filename;                    //file currently opened in the text editor
     char statusmsg[80];
     time_t statusmsg_time;
@@ -79,7 +84,7 @@ char *C_HL_extensions[] = { ".c", ".h", ".cpp", NULL };
 char *C_HL_keywords[] = { "switch", "if", "while", "for", "break", "continue", "return", "else", "struct", "union", "typedef", "static", "enum", "class", "case", 
                          "int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|", "void|", NULL };
 
-struct editorSyntax HLDB[] = {{ "c", C_HL_extensions, C_HL_keywords, "//", "/*", "*/", (HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS) }};
+struct editorSyntax HLDB[] = {{ "c", C_HL_extensions, C_HL_keywords, "//", NULL, "*/", (HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS) }};
 
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
 
@@ -445,7 +450,8 @@ int editorRowRxToCx(erow *row, int rx) {
 }
 
 //this function will update render field of a 'erow' from its 'chars' field
-void editorUpdateRow(erow *row) {
+void *editorUpdateRow(void *arg_p) {
+    erow *row = arg_p;
     int tabs = 0, j;
     for(j = 0; j < row->size; j++)
         if(row->chars[j] == '\t') tabs++;
@@ -465,6 +471,7 @@ void editorUpdateRow(erow *row) {
 
     //calling the editorUpdateSyntax() function to work out the highlighting
     editorUpdateSyntax(row);
+    return NULL;
 }
 
 //this function will insert a new row for a string to the E.row array
@@ -584,23 +591,26 @@ void editorDelChar() {
 /**************************************************************       file io       **************************************************************/
 //function for converting rows to a single string
 //the function returns a pointer to the dynamically allocated character array that stores the file
-char* editorRowsToString(int *buflen) {
-    int totlen = 0;
-    int j;
-    for(j = 0; j < E.numrows; j++)
-        totlen += E.row[j].size + 1;
-    *buflen = totlen;
+void* editorRowsToString(void *arg_p) {
+    int *my_arg = arg_p;
+    int fd = my_arg[0], my_start = my_arg[1], my_end = my_start + my_arg[2];
+    int my_seekpos = my_arg[3], my_len = my_arg[4], j;
+    if(my_end > E.numrows) my_end = E.numrows;
+    char *buf = malloc(my_len), *p = buf;
 
-    char *buf = malloc(totlen);
-    char *p = buf;
-    for(j = 0; j < E.numrows; j++) {
+    for(j = my_start; j < my_end; j++) {
         memcpy(p, E.row[j].chars, E.row[j].size);
         p += E.row[j].size;
         *p = '\n';
         p++;
     }
 
-    return buf;
+    flock(fd, LOCK_EX);
+    lseek(fd, my_seekpos, SEEK_SET);
+    write(fd, buf, my_len);
+    flock(fd, LOCK_UN);
+    free(buf);
+    return NULL;
 }
 
 //function for opening and reading files from disk
@@ -616,13 +626,41 @@ void editorOpen(char *filename) {
     char *line = NULL;
     size_t linecap = 0;
     ssize_t linelen;
+
+    pthread_t *thread_p = NULL;
+    int lineidx = -1;
     while((linelen = getline(&line, &linecap, fp)) != -1) {
         while(linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) linelen--;
-        editorInsertRow(E.numrows, line, linelen);
+        pthread_rwlock_wrlock(&E.row_lock);
+        E.numrows++, lineidx++;
+        E.row = realloc(E.row, sizeof(erow) * E.numrows);
+        thread_p = realloc(thread_p, sizeof(pthread_t) * E.numrows);
+        pthread_rwlock_init(&E.row[lineidx].erow_lock, NULL);
+        pthread_rwlock_unlock(&E.row_lock);
+        
+        pthread_rwlock_wrlock(&E.row[lineidx].erow_lock);
+        E.row[lineidx].idx = lineidx;
+        E.row[lineidx].size = linelen;
+        E.row[lineidx].chars = malloc(linelen + 1);
+        memcpy(E.row[lineidx].chars, line, linelen);
+        E.row[lineidx].chars[linelen] = '\0';
+
+        E.row[lineidx].rsize = 0;
+        E.row[lineidx].render = NULL;
+        E.row[lineidx].hl = NULL;
+        E.row[lineidx].hl_open_comment = 0;
+        pthread_rwlock_unlock(&E.row[lineidx].erow_lock);
+
+        pthread_create(&thread_p[lineidx], NULL, editorUpdateRow, (void *)&E.row[lineidx]);
     }
+
+    int i;
+    for(i = 0; i < E.numrows; i++)
+        pthread_join(thread_p[i], NULL);
+
     free(line);
+    free(thread_p);
     fclose(fp);
-    E.dirty = 0;
 }
 
 //function to save the currently opened file
@@ -636,23 +674,40 @@ void editorSave() {
         editorSelectSyntaxHighlight();
     }
 
-    int len;
-    char *buf = editorRowsToString(&len);
+    int *len = malloc(E.numrows * sizeof(int)), j;
+    len[0] = E.row[0].size + 1;
+    for(j = 1; j < E.numrows; j++)
+        len[j] = len[j - 1] + E.row[j].size + 1;
 
     int fd = open(E.filename, O_RDWR | O_CREAT, 0644);  //because we are creating a new file, we would have to pass on permission for the file (here it is 0644)
+    int thread_range = 10000;
+    int tot_th = (E.numrows + (thread_range - 1)) / thread_range;
+    pthread_t *thread_p = malloc(tot_th * sizeof(pthread_t));
+    int *arg_p = malloc(5 * sizeof(int) * tot_th);
     if(fd != -1) {
-        if(ftruncate(fd, len) != -1)
-            if(write(fd, buf, len) == len) {
-                close(fd);
-                free(buf);
-                E.dirty = 0;
-                editorSetStatusMessage("%d bytes written to disk", len);
-                return;
+        if(ftruncate(fd, len[E.numrows - 1]) != -1) {
+            int i;
+            for(i = 0; i < tot_th; i++) {
+                arg_p[5 * i] = fd, arg_p[5 * i + 1] = thread_range * i, arg_p[5 * i + 2] = thread_range;
+                if(i == 0) arg_p[5 * i + 3] = 0;
+                else arg_p[5 * i + 3] = len[thread_range * i - 1];
+                if(i == 0) arg_p[5 * i + 4] = len[thread_range - 1];
+                if(thread_range * (i + 1) >= E.numrows) arg_p[5 * i + 4] = len[E.numrows - 1] - len[thread_range * i - 1];
+                else arg_p[5 * i + 4] = len[thread_range * (i + 1) - 1] - len[thread_range * i - 1];
+                
+                pthread_create(&thread_p[i], NULL, editorRowsToString, (void *)&arg_p[5 * i]);
             }
-        close(fd);       
-    }
 
-    free(buf);
+            for(i = 0; i < tot_th; i++)
+                pthread_join(thread_p[i], NULL);
+            E.dirty = 0, close(fd);
+            editorSetStatusMessage("%d bytes written to disk", len);
+            free(thread_p), free(arg_p), free(len);
+            return;
+        }
+        close(fd);
+    }
+    free(thread_p), free(arg_p), free(len);
     editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));   //here strerror() function prints the error message corresponding to errno
 }
 
@@ -1080,7 +1135,8 @@ void editorProcessKeypress() {
             editorInsertNewLine();
             break;
 
-        case CTRL_KEY('q'):     
+        case CTRL_KEY('q'):
+                
             if(E.dirty && quit_times > 0) {
                 editorSetStatusMessage("Warning!!! File has unsaved changes. Press Ctrl-Q %d more times to quit", quit_times);
                 quit_times--;
@@ -1158,6 +1214,7 @@ void *initEditor(void *arg_p) {
     E.syntax = NULL;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
     E.screenrows -= 2;
+    pthread_rwlock_init(&E.row_lock, NULL);
 
     return NULL;
 }
