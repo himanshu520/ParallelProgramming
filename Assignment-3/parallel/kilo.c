@@ -8,6 +8,7 @@
 #include<ctype.h>
 #include<errno.h>
 #include<fcntl.h>
+#include<pthread.h>
 #include<stdarg.h>
 #include<stdio.h>
 #include<stdlib.h>
@@ -27,6 +28,7 @@
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define HL_HIGHLIGHT_NUMBERS (1 << 0)
 #define HL_HIGHLIGHT_STRINGS (1 << 1)
+#define UNUSED(x) (void)(x)
 
 enum editorKey { BACKSPACE = 127, ARROW_LEFT = 1000, ARROW_RIGHT, ARROW_UP, ARROW_DOWN, DEL_KEY, HOME_KEY, END_KEY, PAGE_UP, PAGE_DOWN };
 enum editorHighlight { HL_NORMAL = 0, HL_COMMENT, HL_MLCOMMENT, HL_KEYWORD1, HL_KEYWORD2, HL_STRING, HL_NUMBER, HL_MATCH };
@@ -50,6 +52,7 @@ typedef struct erow {
     char *chars, *render;              //pointer to a dynamically allocated character array representing actual row of text and the text to display
     unsigned char *hl;                 //pointer to an array storing the syntax highlighting details of each character of the current row
     int hl_open_comment;               //variable indicating whether the current row ended with an unclosed multiline comment
+    pthread_mutex_t erow_mutex;        //mutex for accessing an erow
 } erow;
 
 //structure to store the editor configuration
@@ -104,7 +107,9 @@ void disableRawMode() {
 }
 
 //function to enable the raw mode upon starting the text editor
-void enableRawMode() {
+void *enableRawMode(void *argp) {
+    UNUSED(argp);
+
     //reading the original terminal configuration, we will use it to restore the terminal when the program exits
     if(tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) die("tcgetattr");
     //this function will be called whenever the program terminates normally
@@ -135,6 +140,8 @@ void enableRawMode() {
     //setting the new terminal attributes
     //TCSAFLUSH tells to apply the change when pending outputs are written to the terminal and it also discards input that hasn't been read
     if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) die("tcsetattr");
+
+    return NULL;
 }
 
 //function to read keypresses
@@ -795,6 +802,10 @@ void abFree(struct abuf *ab) {
     free(ab->b);
 }
 
+void abJoin(struct abuf *abf, struct abuf *abs) {
+    abAppend(abf, abs->b, abs->len);
+    abFree(abs);
+}
 
 /**************************************************************       output        **************************************************************/
 //function to keep track of the row and column numbers corresponding to the top and left edges of the screen
@@ -811,7 +822,8 @@ void editorScroll() {
 }
 
 //function to add the text to display on the screen to a abuf buffer
-void editorDrawRows(struct abuf *ab) {
+void *editorDrawRows(void *argp) {
+    struct abuf *ab = argp;
     int y;
     for(y = 0; y < E.screenrows; y++) {
         int filerow = y + E.rowoff;
@@ -880,10 +892,12 @@ void editorDrawRows(struct abuf *ab) {
 
         abAppend(ab, "\x1b[K\r\n", 5);
     }
+    return NULL;
 }
 
 //function to display the status bar
-void editorDrawStatusBar(struct abuf *ab) {
+void *editorDrawStatusBar(void *argp) {
+    struct abuf *ab = argp;
     abAppend(ab, "\x1b[7m", 4);      //for dispalying the status bar with inverted colours
     
     char status[80], rstatus[80];
@@ -902,41 +916,59 @@ void editorDrawStatusBar(struct abuf *ab) {
     }
     abAppend(ab, "\x1b[m", 3);
     abAppend(ab, "\r\n", 2);
+
+    return NULL;
 }
 
 //function to display the message bar
-void editorDrawMessageBar(struct abuf *ab) {
+void *editorDrawMessageBar(void *argp) {
+    struct abuf *ab = argp;
     abAppend(ab, "\x1b[K", 3);
     int msglen = strlen(E.statusmsg);
     if(msglen > E.screencols) msglen = E.screencols;
     if(msglen && time(NULL) - E.statusmsg_time < 5)
         abAppend(ab, E.statusmsg, msglen);
+    return NULL;
 }
 
 //function to refresh the screen after each keypress
 void editorRefreshScreen() {
+    pthread_t drawRows_thd, drawStatusBar_thd, drawMessageBar_thd;
+    struct abuf drawRows_ab = ABUF_INIT;
+    struct abuf drawStatusBar_ab = ABUF_INIT;
+    struct abuf drawMessageBar_ab = ABUF_INIT;
+
+    //hides the cursor and then reposition the cursor to the beginning of the screen
+    abAppend(&drawRows_ab, "\x1b[?25l\x1b[H", 9);
+    //call editorScroll() to determine the part of the file to be shown on the screen
     editorScroll();
 
-    struct abuf ab = ABUF_INIT;
+    //call editorDrawRows() to write the text/tilde in abuf structure to be displayed on the screen
+    pthread_create(&drawRows_thd, NULL, editorDrawRows, (void *)&drawRows_ab);
+    //call editorDrawStatusBar() to draw the status bar
+    pthread_create(&drawStatusBar_thd, NULL, editorDrawStatusBar, (void *)&drawStatusBar_ab);
+    //call editorDrawMessageBar() to draw the message bar
+    pthread_create(&drawMessageBar_thd, NULL, editorDrawMessageBar, (void *)&drawMessageBar_ab);
 
-    abAppend(&ab, "\x1b[?25l", 6);   //hides the cursor
-    abAppend(&ab, "\x1b[H", 3);      //reposition the cursor to the beginning of the screen
-    
-    editorDrawRows(&ab);             //call editorDrawRows() to write the text/tilde in abuf structure to be displayed on the screen
-    editorDrawStatusBar(&ab);        //call editorDrawStatusBar() to draw the status bar
-    editorDrawMessageBar(&ab);       //call editorDrawMessageBar() to draw the message bar
+    pthread_join(drawRows_thd, NULL);
+    pthread_join(drawStatusBar_thd, NULL);
+    pthread_join(drawMessageBar_thd, NULL);
 
+    abJoin(&drawRows_ab, &drawStatusBar_ab);
+    abJoin(&drawRows_ab, &drawMessageBar_ab);
+
+    //reposition the cursor
     char buf[32];
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy - E.rowoff + 1, E.rx - E.coloff + 1);
-    abAppend(&ab, buf, strlen(buf));
+    abAppend(&drawRows_ab, buf, strlen(buf));
+    //again turn the cursor on
+    abAppend(&drawRows_ab, "\x1b[?25h", 6);
 
-    abAppend(&ab, "\x1b[?25h", 6);   //again turn the cursor on
-
-    write(STDOUT_FILENO, ab.b, ab.len);
-    abFree(&ab);
+    write(STDOUT_FILENO, drawRows_ab.b, drawRows_ab.len);
+    abFree(&drawRows_ab);
 }
 
-//function to print the status message 
+//general function to print the status message 
 void editorSetStatusMessage(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -1099,21 +1131,30 @@ void editorProcessKeypress() {
 
 /**************************************************************        init         **************************************************************/
 //function to initialise all the fields in strucutre E for the editor
-void initEditor() {
+void *initEditor(void *argp) {
+    UNUSED(argp);
+
     E.cx = E.cy = E.rx = E.numrows = E.rowoff = E.coloff = E.statusmsg_time = E.dirty = 0;
     E.row = NULL, E.filename = NULL, E.statusmsg[0] = '\0';
     E.syntax = NULL;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
     E.screenrows -= 2;
+
+    return NULL;
 }
 
 
 /**************************************************************        main         **************************************************************/
 int main(int argc, char **argv) {
-    enableRawMode();
-    initEditor();
+
+    //initialising the editor and setting the terminal
+    pthread_t enableRawMode_thd, initEditor_thd;
+    pthread_create(&enableRawMode_thd, NULL, enableRawMode, NULL);
+    pthread_create(&initEditor_thd, NULL, initEditor, NULL);
+    pthread_join(enableRawMode_thd, NULL);
+    pthread_join(initEditor_thd, NULL);
+
     if(argc >= 2) editorOpen(argv[1]);
-    
     editorSetStatusMessage("Help: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
 
     while(1) {
