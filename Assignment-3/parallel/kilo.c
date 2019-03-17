@@ -651,11 +651,24 @@ void editorSave() {
 
 
 /**************************************************************         find        **************************************************************/
+//function to find the last occurrence of a text (of length lent) in a given pattern (of length lenp)
+char* strrstr(char *text, int lent, char *pattern, int lenp) {
+    int i, j;
+    for(i = lent - lenp; i >= 0; i--) {
+        for(j = 0; j < lenp; j++)
+            if(text[i + j] != pattern[j]) break;
+        if(j == lenp) return text + i;
+    }
+    return NULL;
+}
+
 //callback function for search used in call to editorPrompt
 void editorFindCallback(char *query, int key) {
     //static variable to control search of a pattern within the file
-    //last_match stores the line of previous match (-1 if no such line), and direction stores the direction to search (forward/backward)
-    static int last_match = -1;
+    //last_match_row stores the line of previous match (-1 if no such line), and direction stores the direction to search (forward/backward)
+    //last_match_col stores the starting column of previous match (-1 if no such value)
+    static int last_match_row = 0;
+    static int last_match_col = -1;
     static int direction = 1;
 
     //static variables to store the color information of searched text so that it can be restored later after the search
@@ -670,19 +683,46 @@ void editorFindCallback(char *query, int key) {
     }
 
     if(key == '\r' || key == '\x1b') {
-        last_match = -1;
+        last_match_row = 0;
+        last_match_col = -1;
         direction = 1;
         return;
     } else if(key == ARROW_RIGHT || key == ARROW_DOWN) direction = 1;
     else if(key == ARROW_LEFT || key == ARROW_UP) direction = -1;
     else {
-        last_match = -1;
+        last_match_row = 0;
+        last_match_col = -1;
         direction = 1;
     }
 
-    if(last_match == -1) direction = 1;
-    int current = last_match, i;
+    int current_row = last_match_row, current_col = last_match_col + direction, qlen = strlen(query);
+    if((direction == 1 && current_col < E.row[current_row].rsize) || (direction == -1 && current_col >= 0)) {
+        erow *row = &E.row[current_row];
+        char *match; 
 
+        if(direction == 1) {
+            if((match = strstr(row->render + current_col, query)))
+                last_match_col = match - row->render;
+        } else {
+            if((match = strrstr(row->render, current_col + qlen, query, qlen)))
+                last_match_col = match - row->render;
+        }
+
+        if(match) {
+            E.cy = last_match_row;
+            E.cx = editorRowRxToCx(row, last_match_col);
+            E.rowoff = E.numrows;
+            
+            //highlighting the searched text after saving the current colour info
+            saved_hl_line = current_row;
+            saved_hl = malloc(row->rsize);
+            memcpy(saved_hl, row->hl, row->rsize);
+            memset(&row->hl[last_match_col], HL_MATCH, strlen(query));
+            return;
+        }
+    }
+
+    int current = last_match_row, i;
     for(i = 0; i < E.numrows; i++) {
         current += direction;
 
@@ -691,11 +731,15 @@ void editorFindCallback(char *query, int key) {
         else if(current == E.numrows) current = 0;
 
         erow *row = &E.row[current];
-        char *match = strstr(row->render, query);
+        char *match;
+        if(direction == 1) match = strstr(row->render, query);
+        else match = strrstr(row->render, row->rsize, query, qlen);
+
         if(match) {
-            last_match = current;
+            last_match_row = current;
+            last_match_col = match - row->render;
             E.cy = current;
-            E.cx = editorRowRxToCx(row, match - row->render);
+            E.cx = editorRowRxToCx(row, last_match_col);
             E.rowoff = E.numrows;
 
             //highlighting the searched text after saving the current colour info
