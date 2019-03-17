@@ -107,8 +107,8 @@ void disableRawMode() {
 }
 
 //function to enable the raw mode upon starting the text editor
-void *enableRawMode(void *argp) {
-    UNUSED(argp);
+void *enableRawMode(void *arg_p) {
+    UNUSED(arg_p);
 
     //reading the original terminal configuration, we will use it to restore the terminal when the program exits
     if(tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) die("tcgetattr");
@@ -822,82 +822,101 @@ void editorScroll() {
 }
 
 //function to add the text to display on the screen to a abuf buffer
-void *editorDrawRows(void *argp) {
-    struct abuf *ab = argp;
-    int y;
-    for(y = 0; y < E.screenrows; y++) {
-        int filerow = y + E.rowoff;
-        if(filerow >= E.numrows) {
-            //if we have reached past the end of the current file, draw '~' on the left end of the rows
+void *editorDrawRow(void *arg_p) {
+    int y = *((int *)arg_p), filerow = y + E.rowoff;
+    struct abuf *ab = malloc(sizeof(struct abuf));
+    ab->b = NULL, ab->len = 0;
 
-            if(E.numrows == 0 && y == E.screenrows / 3) {
-                char welcome[80];
-                int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION);
-                if(welcomelen > E.screencols) welcomelen = E.screencols;
-                int padding = (E.screencols - welcomelen) / 2;
-                if(padding) {
-                    abAppend(ab, "~", 1);
-                    padding--;
-                }
-                while(padding--) abAppend(ab, " ", 1);
-                abAppend(ab, welcome, welcomelen);
-            } else {
+    if(filerow >= E.numrows) {
+        //if we have reached past the end of the current file, draw '~' on the left end of the rows
+
+        if(E.numrows == 0 && y == E.screenrows / 3) {
+            char welcome[80];
+            int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION);
+            if(welcomelen > E.screencols) welcomelen = E.screencols;
+            int padding = (E.screencols - welcomelen) / 2;
+            if(padding) {
                 abAppend(ab, "~", 1);
+                padding--;
             }
+            while(padding--) abAppend(ab, " ", 1);
+            abAppend(ab, welcome, welcomelen);
         } else {
-            //if we have not reached the end of the file append the current row to the abuf buffer
-
-            int len = E.row[filerow].rsize - E.coloff;
-            if(len < 0) len = 0;
-            if(len > E.screencols) len = E.screencols;
-
-            //checking if a character is a digit, if so colouring the digit with a different colour
-            char *c = &E.row[filerow].render[E.coloff];
-            unsigned char *hl = &E.row[filerow].hl[E.coloff];
-
-            int j, current_color = -1;      //to keep track of current color so as to minimise the number of colour updates (-1 means color of normal text)
-
-            for(j = 0; j < len; j++) {
-                if(iscntrl(c[j])) {
-                    char sym = (c[j] <= 26) ? '@' + c[j] : '?';
-                    abAppend(ab, "\x1b[7m", 4);     //switching to inverted colours
-                    abAppend(ab, &sym, 1);
-                    abAppend(ab, "\x1b[m", 3);      //restoring the normal colour
-                    
-                    //previous statement turns off all the previous text formatting, including colours, so we will restore them
-                    if(current_color != -1) {
-                        char buf[16];
-                        int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", current_color);
-                        abAppend(ab, buf, clen);
-                    }
-                } else if(hl[j] == HL_NORMAL) {
-                    if(current_color != -1) {
-                        abAppend(ab, "\x1b[39m", 5);
-                        current_color = -1;
-                    }
-                    abAppend(ab, &c[j], 1);
-                } else {
-                    int color = editorSyntaxToColor(hl[j]);
-                    if(color != current_color) {
-                        current_color = color;
-                        char buf[16];
-                        int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color);
-                        abAppend(ab, buf, clen);
-                    }
-                    abAppend(ab, &c[j], 1);
-                }
-            }
-            abAppend(ab, "\x1b[39m", 5);
+            abAppend(ab, "~", 1);
         }
+    } else {
+        //if we have not reached the end of the file append the current row to the abuf buffer
 
-        abAppend(ab, "\x1b[K\r\n", 5);
+        int len = E.row[filerow].rsize - E.coloff;
+        if(len < 0) len = 0;
+        if(len > E.screencols) len = E.screencols;
+
+        //checking if a character is a digit, if so colouring the digit with a different colour
+        char *c = &E.row[filerow].render[E.coloff];
+        unsigned char *hl = &E.row[filerow].hl[E.coloff];
+
+        int j, current_color = -1;      //to keep track of current color so as to minimise the number of colour updates (-1 means color of normal text)
+
+        for(j = 0; j < len; j++) {
+            if(iscntrl(c[j])) {
+                char sym = (c[j] <= 26) ? '@' + c[j] : '?';
+                abAppend(ab, "\x1b[7m", 4);     //switching to inverted colours
+                abAppend(ab, &sym, 1);
+                abAppend(ab, "\x1b[m", 3);      //restoring the normal colour
+                
+                //previous statement turns off all the previous text formatting, including colours, so we will restore them
+                if(current_color != -1) {
+                    char buf[16];
+                    int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", current_color);
+                    abAppend(ab, buf, clen);
+                }
+            } else if(hl[j] == HL_NORMAL) {
+                if(current_color != -1) {
+                    abAppend(ab, "\x1b[39m", 5);
+                    current_color = -1;
+                }
+                abAppend(ab, &c[j], 1);
+            } else {
+                int color = editorSyntaxToColor(hl[j]);
+                if(color != current_color) {
+                    current_color = color;
+                    char buf[16];
+                    int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color);
+                    abAppend(ab, buf, clen);
+                }
+                abAppend(ab, &c[j], 1);
+            }
+        }
+        abAppend(ab, "\x1b[39m", 5);
     }
+    abAppend(ab, "\x1b[K\r\n", 5);
+    return (void *)ab;
+}
+
+//function to add the text to display on the screen to a abuf buffer
+void *editorDrawRows(void *arg_p) {
+    struct abuf *ab = (struct abuf*)arg_p;
+    pthread_t drawRow_thd[E.screenrows];
+    int y, arg[E.screenrows];
+
+    for(y = 0; y < E.screenrows; y++) {
+        arg[y] = y;
+        pthread_create(&drawRow_thd[y], NULL, editorDrawRow, (void *)&arg[y]);
+    }
+
+    for(y = 0; y < E.screenrows; y++) {
+        void *ab_p;
+        pthread_join(drawRow_thd[y], &ab_p);
+        abJoin(ab, (struct abuf *)ab_p);
+        free((struct abuf *)ab_p);
+    }
+
     return NULL;
 }
 
 //function to display the status bar
-void *editorDrawStatusBar(void *argp) {
-    struct abuf *ab = argp;
+void *editorDrawStatusBar(void *arg_p) {
+    struct abuf *ab = arg_p;
     abAppend(ab, "\x1b[7m", 4);      //for dispalying the status bar with inverted colours
     
     char status[80], rstatus[80];
@@ -921,8 +940,8 @@ void *editorDrawStatusBar(void *argp) {
 }
 
 //function to display the message bar
-void *editorDrawMessageBar(void *argp) {
-    struct abuf *ab = argp;
+void *editorDrawMessageBar(void *arg_p) {
+    struct abuf *ab = arg_p;
     abAppend(ab, "\x1b[K", 3);
     int msglen = strlen(E.statusmsg);
     if(msglen > E.screencols) msglen = E.screencols;
@@ -1131,8 +1150,8 @@ void editorProcessKeypress() {
 
 /**************************************************************        init         **************************************************************/
 //function to initialise all the fields in strucutre E for the editor
-void *initEditor(void *argp) {
-    UNUSED(argp);
+void *initEditor(void *arg_p) {
+    UNUSED(arg_p);
 
     E.cx = E.cy = E.rx = E.numrows = E.rowoff = E.coloff = E.statusmsg_time = E.dirty = 0;
     E.row = NULL, E.filename = NULL, E.statusmsg[0] = '\0';
