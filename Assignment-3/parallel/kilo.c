@@ -30,6 +30,7 @@
 #define HL_HIGHLIGHT_NUMBERS (1 << 0)
 #define HL_HIGHLIGHT_STRINGS (1 << 1)
 #define UNUSED(x) (void)(x)
+#define THREAD_RANGE 10000
 
 enum editorKey { BACKSPACE = 127, ARROW_LEFT = 1000, ARROW_RIGHT, ARROW_UP, ARROW_DOWN, DEL_KEY, HOME_KEY, END_KEY, PAGE_UP, PAGE_DOWN };
 enum editorHighlight { HL_NORMAL = 0, HL_COMMENT, HL_MLCOMMENT, HL_KEYWORD1, HL_KEYWORD2, HL_STRING, HL_NUMBER, HL_MATCH };
@@ -84,7 +85,7 @@ char *C_HL_extensions[] = { ".c", ".h", ".cpp", NULL };
 char *C_HL_keywords[] = { "switch", "if", "while", "for", "break", "continue", "return", "else", "struct", "union", "typedef", "static", "enum", "class", "case", 
                          "int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|", "void|", NULL };
 
-struct editorSyntax HLDB[] = {{ "c", C_HL_extensions, C_HL_keywords, "//", NULL, "*/", (HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS) }};
+struct editorSyntax HLDB[] = {{ "c", C_HL_extensions, C_HL_keywords, "//", "/*", "*/", (HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS) }};
 
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
 
@@ -396,9 +397,11 @@ int editorSyntaxToColor(int hl) {
 }
 
 //function that updates the 'E.syntax' field based on the file extension
-void editorSelectSyntaxHighlight() {
+void *editorSelectSyntaxHighlight(void *arg_p) {
+    UNUSED(arg_p);
+
     E.syntax = NULL;
-    if(E.filename == NULL) return;
+    if(E.filename == NULL) return NULL;
 
     char *ext = strchr(E.filename, '.');    //strchr() matches the last occurence of '.' in E.filename
 
@@ -415,11 +418,12 @@ void editorSelectSyntaxHighlight() {
                 for(filerow = 0; filerow < E.numrows; filerow++)
                     editorUpdateSyntax(&E.row[filerow]);
                 
-                return;
+                return NULL;
             }
             i++;
         }
     }
+    return NULL;
 }
 
 
@@ -450,8 +454,7 @@ int editorRowRxToCx(erow *row, int rx) {
 }
 
 //this function will update render field of a 'erow' from its 'chars' field
-void *editorUpdateRow(void *arg_p) {
-    erow *row = arg_p;
+void editorUpdateRow(erow *row) {
     int tabs = 0, j;
     for(j = 0; j < row->size; j++)
         if(row->chars[j] == '\t') tabs++;
@@ -471,6 +474,33 @@ void *editorUpdateRow(void *arg_p) {
 
     //calling the editorUpdateSyntax() function to work out the highlighting
     editorUpdateSyntax(row);
+}
+
+//this function will update render field of a 'erow' from its 'chars' field (called from only inside openEditor() function)
+void *editorUpdateRowMod(void *arg_p) {
+    int my_start = THREAD_RANGE * (*((int *)arg_p));
+    int my_end = my_start + THREAD_RANGE, i;
+    if(my_end > E.numrows) my_end = E.numrows;
+    
+    for(i = my_start; i < my_end; i++) {
+        erow *row = &E.row[i];
+        int tabs = 0, j;
+        for(j = 0; j < row->size; j++)
+            if(row->chars[j] == '\t') tabs++;
+
+        free(row->render);
+        row->render = malloc(row->size + tabs * (KILO_TAB_STOP - 1) + 1);
+
+        int idx = 0;
+        for(j = 0; j < row->size; j++) {
+            if(row->chars[j] == '\t') {
+                row->render[idx++] = ' ';
+                while(idx % KILO_TAB_STOP != 0) row->render[idx++] = ' ';
+            } else row->render[idx++] = row->chars[j];
+        }
+        row->render[idx] = '\0';
+        row->rsize = idx;
+    }
     return NULL;
 }
 
@@ -593,8 +623,8 @@ void editorDelChar() {
 //the function returns a pointer to the dynamically allocated character array that stores the file
 void* editorRowsToString(void *arg_p) {
     int *my_arg = arg_p;
-    int fd = my_arg[0], my_start = my_arg[1], my_end = my_start + my_arg[2];
-    int my_seekpos = my_arg[3], my_len = my_arg[4], j;
+    int fd = my_arg[0], my_start = my_arg[1] * THREAD_RANGE, my_end = my_start + THREAD_RANGE;
+    int my_seekpos = my_arg[2], my_len = my_arg[3], j;
     if(my_end > E.numrows) my_end = E.numrows;
     char *buf = malloc(my_len), *p = buf;
 
@@ -618,7 +648,7 @@ void editorOpen(char *filename) {
     free(E.filename);
     E.filename = strdup(filename);
 
-    editorSelectSyntaxHighlight();
+    editorSelectSyntaxHighlight(NULL);
 
     FILE *fp = fopen(filename, "r");
     if(!fp) die("open");
@@ -627,51 +657,74 @@ void editorOpen(char *filename) {
     size_t linecap = 0;
     ssize_t linelen;
 
-    pthread_t *thread_p = NULL;
-    int lineidx = -1;
+    pthread_t **thread_p = NULL;
+    int **thread_arg = NULL;
+    int lineidx = -1, thd_cnt = 0;
+
     while((linelen = getline(&line, &linecap, fp)) != -1) {
         while(linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) linelen--;
-        pthread_rwlock_wrlock(&E.row_lock);
+
         E.numrows++, lineidx++;
         E.row = realloc(E.row, sizeof(erow) * E.numrows);
-        thread_p = realloc(thread_p, sizeof(pthread_t) * E.numrows);
-        pthread_rwlock_init(&E.row[lineidx].erow_lock, NULL);
-        pthread_rwlock_unlock(&E.row_lock);
-        
-        pthread_rwlock_wrlock(&E.row[lineidx].erow_lock);
-        E.row[lineidx].idx = lineidx;
-        E.row[lineidx].size = linelen;
         E.row[lineidx].chars = malloc(linelen + 1);
         memcpy(E.row[lineidx].chars, line, linelen);
         E.row[lineidx].chars[linelen] = '\0';
+        E.row[lineidx].idx = lineidx;
+        E.row[lineidx].size = linelen;
 
         E.row[lineidx].rsize = 0;
         E.row[lineidx].render = NULL;
         E.row[lineidx].hl = NULL;
         E.row[lineidx].hl_open_comment = 0;
-        pthread_rwlock_unlock(&E.row[lineidx].erow_lock);
+        pthread_rwlock_init(&E.row[lineidx].erow_lock, NULL);
 
-        pthread_create(&thread_p[lineidx], NULL, editorUpdateRow, (void *)&E.row[lineidx]);
+        if(lineidx % THREAD_RANGE == (THREAD_RANGE - 1)) {
+            thd_cnt++;
+            thread_p = realloc(thread_p, sizeof(pthread_t *) * thd_cnt);
+            thread_arg = realloc(thread_arg, sizeof(int *) * thd_cnt);
+            thread_p[thd_cnt - 1] = malloc(sizeof(pthread_t));
+            thread_arg[thd_cnt - 1] = malloc(sizeof(int));
+            *thread_arg[thd_cnt - 1] = thd_cnt - 1;
+            pthread_create(thread_p[thd_cnt - 1], NULL, editorUpdateRowMod, (void *)thread_arg[thd_cnt - 1]);
+        }
+    }
+
+    if(lineidx % THREAD_RANGE < THREAD_RANGE - 1) {
+        thd_cnt++;
+        thread_p = realloc(thread_p, sizeof(pthread_t *) * thd_cnt);
+        thread_arg = realloc(thread_arg, sizeof(int *) * thd_cnt);
+        thread_p[thd_cnt - 1] = malloc(sizeof(pthread_t));
+        thread_arg[thd_cnt - 1] = malloc(sizeof(int));
+        *thread_arg[thd_cnt - 1] = thd_cnt - 1;
+        pthread_create(thread_p[thd_cnt - 1], NULL, editorUpdateRowMod, (void *)thread_arg[thd_cnt - 1]);
     }
 
     int i;
-    for(i = 0; i < E.numrows; i++)
-        pthread_join(thread_p[i], NULL);
+    for(i = 0; i < thd_cnt; i++) {
+        pthread_join(*thread_p[i], NULL);
+        free(thread_p[i]), free(thread_arg[i]);
+    }
 
-    free(line);
-    free(thread_p);
+    for(i = 0; i < E.numrows; i++)
+        editorUpdateSyntax(&E.row[i]);
+
+    free(line), free(thread_p), free(thread_arg);
     fclose(fp);
 }
 
 //function to save the currently opened file
 void editorSave() {
+    pthread_t editorSelectSyntaxHighlight_thd;
+    int highlight_thd = 0;
+
     if(E.filename == NULL) {
         E.filename = editorPrompt("Save as: %s (ESC to cancel)", NULL);
         if(E.filename == NULL) {
             editorSetStatusMessage("Save aborted");
             return;
         }
-        editorSelectSyntaxHighlight();
+        pthread_create(&editorSelectSyntaxHighlight_thd, NULL, editorSelectSyntaxHighlight, NULL);
+        highlight_thd = 1;
     }
 
     int *len = malloc(E.numrows * sizeof(int)), j;
@@ -679,36 +732,41 @@ void editorSave() {
     for(j = 1; j < E.numrows; j++)
         len[j] = len[j - 1] + E.row[j].size + 1;
 
-    int fd = open(E.filename, O_RDWR | O_CREAT, 0644);  //because we are creating a new file, we would have to pass on permission for the file (here it is 0644)
-    int thread_range = 10000;
-    int tot_th = (E.numrows + (thread_range - 1)) / thread_range;
-    pthread_t *thread_p = malloc(tot_th * sizeof(pthread_t));
-    int *arg_p = malloc(5 * sizeof(int) * tot_th);
+    //because we are creating a new file, we would have to pass on permission for the file (here it is 0644)
+    int fd = open(E.filename, O_RDWR | O_CREAT, 0644);
+
     if(fd != -1) {
         if(ftruncate(fd, len[E.numrows - 1]) != -1) {
-            int i;
-            for(i = 0; i < tot_th; i++) {
-                arg_p[5 * i] = fd, arg_p[5 * i + 1] = thread_range * i, arg_p[5 * i + 2] = thread_range;
-                if(i == 0) arg_p[5 * i + 3] = 0;
-                else arg_p[5 * i + 3] = len[thread_range * i - 1];
-                if(i == 0) arg_p[5 * i + 4] = len[thread_range - 1];
-                if(thread_range * (i + 1) >= E.numrows) arg_p[5 * i + 4] = len[E.numrows - 1] - len[thread_range * i - 1];
-                else arg_p[5 * i + 4] = len[thread_range * (i + 1) - 1] - len[thread_range * i - 1];
+            int thread_cnt = (E.numrows + (THREAD_RANGE - 1)) / THREAD_RANGE;
+            pthread_t *thread_p = malloc(thread_cnt * sizeof(pthread_t));
+            int (*arg_p)[4] = malloc(4 * sizeof(int) * thread_cnt), i;
+
+            for(i = 0; i < thread_cnt; i++) {
+                arg_p[i][0] = fd, arg_p[i][1] = i, arg_p[i][2] = i ? len[THREAD_RANGE * i - 1] : 0;
+                if(THREAD_RANGE * (i + 1) >= E.numrows) {
+                    arg_p[i][3] = i == 0 ? len[E.numrows - 1] : len[E.numrows - 1] - len[THREAD_RANGE * i - 1];
+                } else {
+                    arg_p[i][3] = i == 0 ? len[THREAD_RANGE - 1] : len[THREAD_RANGE * (i + 1) - 1] - len[THREAD_RANGE * i - 1];
+                }
                 
-                pthread_create(&thread_p[i], NULL, editorRowsToString, (void *)&arg_p[5 * i]);
+                pthread_create(&thread_p[i], NULL, editorRowsToString, (void *)&arg_p[i]);
             }
 
-            for(i = 0; i < tot_th; i++)
+            for(i = 0; i < thread_cnt; i++)
                 pthread_join(thread_p[i], NULL);
+    
             E.dirty = 0, close(fd);
-            editorSetStatusMessage("%d bytes written to disk", len);
+            editorSetStatusMessage("%d bytes written to disk", len[E.numrows - 1]);
             free(thread_p), free(arg_p), free(len);
+            if(highlight_thd) pthread_join(editorSelectSyntaxHighlight_thd, NULL);
             return;
         }
         close(fd);
     }
-    free(thread_p), free(arg_p), free(len);
-    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));   //here strerror() function prints the error message corresponding to errno
+    free(len);
+    if(highlight_thd) pthread_join(editorSelectSyntaxHighlight_thd, NULL);
+    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
+    //here strerror() function prints the error message corresponding to errno
 }
 
 
