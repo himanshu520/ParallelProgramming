@@ -13,7 +13,7 @@
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
-#include <sys/file.h>
+#include<sys/file.h>
 #include<sys/ioctl.h>
 #include<sys/types.h>
 #include<unistd.h>
@@ -77,6 +77,7 @@ struct editorConfig {
     time_t statusmsg_time;
     struct editorSyntax *syntax;       //structure to store the syntax highlighting info
     struct termios orig_termios;       //we will store the original terminal configurations
+    pthread_mutex_t file_mutex;        //mutex to write to file while saving
 } E;
 
 
@@ -483,24 +484,33 @@ void *editorUpdateRowMod(void *arg_p) {
     if(my_end > E.numrows) my_end = E.numrows;
     
     for(i = my_start; i < my_end; i++) {
-        erow *row = &E.row[i];
-        int tabs = 0, j;
-        for(j = 0; j < row->size; j++)
-            if(row->chars[j] == '\t') tabs++;
+        pthread_rwlock_rdlock(&E.row_lock);
+        char *rowchars = E.row[i].chars;
+        int rowsz = E.row[i].size, j;
+        pthread_rwlock_unlock(&E.row_lock);
+        
+        int tabs = 0;
+        for(j = 0; j < rowsz; j++)
+            if(rowchars[j] == '\t') tabs++;
 
-        free(row->render);
-        row->render = malloc(row->size + tabs * (KILO_TAB_STOP - 1) + 1);
+        free(E.row[i].render);
+        char *rowrender = malloc(rowsz + tabs * (KILO_TAB_STOP - 1) + 1);
 
         int idx = 0;
-        for(j = 0; j < row->size; j++) {
-            if(row->chars[j] == '\t') {
-                row->render[idx++] = ' ';
-                while(idx % KILO_TAB_STOP != 0) row->render[idx++] = ' ';
-            } else row->render[idx++] = row->chars[j];
+        for(j = 0; j < rowsz; j++) {
+            if(rowchars[j] == '\t') {
+                rowrender[idx++] = ' ';
+                while(idx % KILO_TAB_STOP != 0) rowrender[idx++] = ' ';
+            } else rowrender[idx++] = rowchars[j];
         }
-        row->render[idx] = '\0';
-        row->rsize = idx;
+        rowrender[idx] = '\0';
+        
+        pthread_rwlock_rdlock(&E.row_lock);
+        E.row[i].render = rowrender;
+        E.row[i].rsize = idx;
+        pthread_rwlock_unlock(&E.row_lock);
     }
+
     return NULL;
 }
 
@@ -635,10 +645,10 @@ void* editorRowsToString(void *arg_p) {
         p++;
     }
 
-    flock(fd, LOCK_EX);
+    pthread_mutex_lock(&E.file_mutex);
     lseek(fd, my_seekpos, SEEK_SET);
     write(fd, buf, my_len);
-    flock(fd, LOCK_UN);
+    pthread_mutex_unlock(&E.file_mutex);
     free(buf);
     return NULL;
 }
@@ -665,7 +675,9 @@ void editorOpen(char *filename) {
         while(linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) linelen--;
 
         E.numrows++, lineidx++;
+        pthread_rwlock_wrlock(&E.row_lock);
         E.row = realloc(E.row, sizeof(erow) * E.numrows);
+        pthread_rwlock_unlock(&E.row_lock);
         E.row[lineidx].chars = malloc(linelen + 1);
         memcpy(E.row[lineidx].chars, line, linelen);
         E.row[lineidx].chars[linelen] = '\0';
@@ -685,7 +697,8 @@ void editorOpen(char *filename) {
             thread_p[thd_cnt - 1] = malloc(sizeof(pthread_t));
             thread_arg[thd_cnt - 1] = malloc(sizeof(int));
             *thread_arg[thd_cnt - 1] = thd_cnt - 1;
-            pthread_create(thread_p[thd_cnt - 1], NULL, editorUpdateRowMod, (void *)thread_arg[thd_cnt - 1]);
+            if(pthread_create(thread_p[thd_cnt - 1], NULL, editorUpdateRowMod, (void *)thread_arg[thd_cnt - 1]) != 0)
+                die("Thread creation failed");
         }
     }
 
@@ -1273,6 +1286,7 @@ void *initEditor(void *arg_p) {
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
     E.screenrows -= 2;
     pthread_rwlock_init(&E.row_lock, NULL);
+    pthread_mutex_init(&E.file_mutex, NULL);
 
     return NULL;
 }
