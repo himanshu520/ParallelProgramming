@@ -54,24 +54,20 @@ typedef struct erow {
     char *chars, *render;              //pointer to a dynamically allocated character array representing actual row of text and the text to display
     unsigned char *hl;                 //pointer to an array storing the syntax highlighting details of each character of the current row
     int hl_open_comment;               //variable indicating whether the current row ended with an unclosed multiline comment
-    pthread_rwlock_t erow_lock;        //mutex for accessing an erow
 } erow;
 
 //structure to store the editor configuration
 struct editorConfig {
     int cx, cy;                        //to keep track of the current position of the cursor within the file
     int rx;                            //to keep track of column number in the actually rendered text on the screen (cx <= rx)
-    pthread_rwlock_t pos_lock;         //mutex for cx, rx, cy
     int rowoff;                        //this will keep track of the row number corresponding to top of the screen 
     int coloff;                        //this will keep track of the column number corresponding to left edge of the screen
-    pthread_rwlock_t offset_lock;      //mutex for rowoff and coloff
     int screenrows;                    //number of rows in our current editor configuration
     int screencols;                    //number of columns in our current editor configuration
     int numrows;                       //number of rows (non empty) lines in our file
     erow *row;                         //dynamically allocated array that will store the rows of our file
     pthread_rwlock_t row_lock;         //mutex for numrows and row.
     int dirty;                         //shows whether the currently opened file in the editor has been modified or not
-    pthread_rwlock_t dirty_lock;       //mutex for dirty flag
     char *filename;                    //file currently opened in the text editor
     char statusmsg[80];
     time_t statusmsg_time;
@@ -253,11 +249,11 @@ int is_separator(int c) {
 }
 
 //function to update the 'hl' array for a row
-void editorUpdateSyntax(erow *row) {
+int editorUpdateSyntax(erow *row) {
     row->hl = realloc(row->hl, row->rsize);
     memset(row->hl, HL_NORMAL, row->rsize); //giving a default highlight value to all the charachters
 
-    if(E.syntax == NULL) return;    //check if any syntax highlighting is to be done
+    if(E.syntax == NULL) return row->idx;    //check if any syntax highlighting is to be done
 
     char **keywords = E.syntax->keywords;
 
@@ -380,7 +376,9 @@ void editorUpdateSyntax(erow *row) {
     int changed = (row->hl_open_comment != in_comment);
     row->hl_open_comment = in_comment;
     if(changed && row->idx + 1 < E.numrows)
-        editorUpdateSyntax(&E.row[row->idx + 1]);
+        return editorUpdateSyntax(&E.row[row->idx + 1]);
+    
+    return row->idx;
 }
 
 //function to map the values in 'hl' to actual colours
@@ -416,8 +414,8 @@ void *editorSelectSyntaxHighlight(void *arg_p) {
 
                 //updating the highlighting of the current file
                 int filerow;
-                for(filerow = 0; filerow < E.numrows; filerow++)
-                    editorUpdateSyntax(&E.row[filerow]);
+                for(filerow = 0; filerow < E.numrows; )
+                    filerow = editorUpdateSyntax(&E.row[filerow]) + 1;
                 
                 return NULL;
             }
@@ -478,7 +476,7 @@ void editorUpdateRow(erow *row) {
 }
 
 //this function will update render field of a 'erow' from its 'chars' field (called from only inside openEditor() function)
-void *editorUpdateRowMod(void *arg_p) {
+void *editorUpdateRowParallel(void *arg_p) {
     int my_start = THREAD_RANGE * (*((int *)arg_p));
     int my_end = my_start + THREAD_RANGE, i;
     if(my_end > E.numrows) my_end = E.numrows;
@@ -493,7 +491,6 @@ void *editorUpdateRowMod(void *arg_p) {
         for(j = 0; j < rowsz; j++)
             if(rowchars[j] == '\t') tabs++;
 
-        free(E.row[i].render);
         char *rowrender = malloc(rowsz + tabs * (KILO_TAB_STOP - 1) + 1);
 
         int idx = 0;
@@ -506,6 +503,7 @@ void *editorUpdateRowMod(void *arg_p) {
         rowrender[idx] = '\0';
         
         pthread_rwlock_rdlock(&E.row_lock);
+        free(E.row[i].render);
         E.row[i].render = rowrender;
         E.row[i].rsize = idx;
         pthread_rwlock_unlock(&E.row_lock);
@@ -688,7 +686,6 @@ void editorOpen(char *filename) {
         E.row[lineidx].render = NULL;
         E.row[lineidx].hl = NULL;
         E.row[lineidx].hl_open_comment = 0;
-        pthread_rwlock_init(&E.row[lineidx].erow_lock, NULL);
 
         if(lineidx % THREAD_RANGE == (THREAD_RANGE - 1)) {
             thd_cnt++;
@@ -697,8 +694,8 @@ void editorOpen(char *filename) {
             thread_p[thd_cnt - 1] = malloc(sizeof(pthread_t));
             thread_arg[thd_cnt - 1] = malloc(sizeof(int));
             *thread_arg[thd_cnt - 1] = thd_cnt - 1;
-            if(pthread_create(thread_p[thd_cnt - 1], NULL, editorUpdateRowMod, (void *)thread_arg[thd_cnt - 1]) != 0)
-                die("Thread creation failed");
+            if(pthread_create(thread_p[thd_cnt - 1], NULL, editorUpdateRowParallel, (void *)thread_arg[thd_cnt - 1]) != 0)
+                die("ThreadCreate");
         }
     }
 
@@ -709,7 +706,8 @@ void editorOpen(char *filename) {
         thread_p[thd_cnt - 1] = malloc(sizeof(pthread_t));
         thread_arg[thd_cnt - 1] = malloc(sizeof(int));
         *thread_arg[thd_cnt - 1] = thd_cnt - 1;
-        pthread_create(thread_p[thd_cnt - 1], NULL, editorUpdateRowMod, (void *)thread_arg[thd_cnt - 1]);
+        if(pthread_create(thread_p[thd_cnt - 1], NULL, editorUpdateRowParallel, (void *)thread_arg[thd_cnt - 1]) != 0)
+                die("ThreadCreate");
     }
 
     int i;
@@ -718,8 +716,8 @@ void editorOpen(char *filename) {
         free(thread_p[i]), free(thread_arg[i]);
     }
 
-    for(i = 0; i < E.numrows; i++)
-        editorUpdateSyntax(&E.row[i]);
+    for(i = 0; i < E.numrows; )
+        i = editorUpdateSyntax(&E.row[i]) + 1;
 
     free(line), free(thread_p), free(thread_arg);
     fclose(fp);
@@ -740,6 +738,12 @@ void editorSave() {
         highlight_thd = 1;
     }
 
+    if(E.numrows == 0) {
+        editorSetStatusMessage("0 bytes written to disk");
+        if(highlight_thd) pthread_join(editorSelectSyntaxHighlight_thd, NULL);
+        return;
+    }
+
     int *len = malloc(E.numrows * sizeof(int)), j;
     len[0] = E.row[0].size + 1;
     for(j = 1; j < E.numrows; j++)
@@ -756,13 +760,12 @@ void editorSave() {
 
             for(i = 0; i < thread_cnt; i++) {
                 arg_p[i][0] = fd, arg_p[i][1] = i, arg_p[i][2] = i ? len[THREAD_RANGE * i - 1] : 0;
-                if(THREAD_RANGE * (i + 1) >= E.numrows) {
+                if(THREAD_RANGE * (i + 1) >= E.numrows)
                     arg_p[i][3] = i == 0 ? len[E.numrows - 1] : len[E.numrows - 1] - len[THREAD_RANGE * i - 1];
-                } else {
-                    arg_p[i][3] = i == 0 ? len[THREAD_RANGE - 1] : len[THREAD_RANGE * (i + 1) - 1] - len[THREAD_RANGE * i - 1];
-                }
+                else arg_p[i][3] = i == 0 ? len[THREAD_RANGE - 1] : len[THREAD_RANGE * (i + 1) - 1] - len[THREAD_RANGE * i - 1];
                 
-                pthread_create(&thread_p[i], NULL, editorRowsToString, (void *)&arg_p[i]);
+                if(pthread_create(&thread_p[i], NULL, editorRowsToString, (void *)&arg_p[i]) != 0)
+                    die("ThreadCreate");
             }
 
             for(i = 0; i < thread_cnt; i++)
