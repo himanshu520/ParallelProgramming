@@ -29,6 +29,7 @@
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define HL_HIGHLIGHT_NUMBERS (1 << 0)
 #define HL_HIGHLIGHT_STRINGS (1 << 1)
+#define HL_HIGHLIGHT_SPELLCHECK (1 << 2)
 #define UNUSED(x) (void)(x)
 #define THREAD_RANGE 10000
 
@@ -53,6 +54,7 @@ typedef struct erow {
     int size, rsize, idx;              //idx is the index of the row within the file
     char *chars, *render;              //pointer to a dynamically allocated character array representing actual row of text and the text to display
     unsigned char *hl;                 //pointer to an array storing the syntax highlighting details of each character of the current row
+    int *spell_ch;                     //pointer to an array that stores the spell checking info of the file
     int hl_open_comment;               //variable indicating whether the current row ended with an unclosed multiline comment
 } erow;
 
@@ -82,7 +84,10 @@ char *C_HL_extensions[] = { ".c", ".h", ".cpp", NULL };
 char *C_HL_keywords[] = { "switch", "if", "while", "for", "break", "continue", "return", "else", "struct", "union", "typedef", "static", "enum", "class", "case", 
                          "int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|", "void|", NULL };
 
-struct editorSyntax HLDB[] = {{ "c", C_HL_extensions, C_HL_keywords, "//", "/*", "*/", (HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS) }};
+char *TXT_HL_extensions[] = { ".txt", NULL };
+char *TXT_HL_keywords[] = { NULL };
+struct editorSyntax HLDB[] = { { "c", C_HL_extensions, C_HL_keywords, "//", "/*", "*/", (HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS) },
+                               { "txt", TXT_HL_extensions, TXT_HL_keywords, NULL, NULL, NULL, (HL_HIGHLIGHT_SPELLCHECK) } };
 
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
 
@@ -248,6 +253,36 @@ int is_separator(int c) {
     return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[];", c) != NULL;
 }
 
+int spellCheckFindWord(const char *word) {
+    char *words[] = {"the", "world", "is", "a", "big", "place"};
+    int i = 0;
+    for(i = 0; i < 6; i++)
+        if(strcmp(words[i], word) == 0) return 1;
+    return 0;
+}
+
+//function to update the 'spell_ch' array for a row
+void editorUpdateSpellCheck(erow *row) {
+    row->spell_ch = realloc(row->spell_ch, row->rsize * sizeof(int));
+    memset(row->spell_ch, 0, row->rsize * sizeof(int));          //giving a default value that there is no syntax error for now
+
+    if(E.syntax == NULL || (E.syntax->flags & HL_HIGHLIGHT_SPELLCHECK) == 0) return;    //check if spell checking is to be done
+
+    int i = 0;
+    char *word = malloc(row->rsize);
+    while(i < row->rsize) {
+        int j, k;
+        for(j = i; j < row->rsize && isalpha(row->render[j]); j++)
+            word[j - i] = row->render[j];
+        word[j - i] = '\0';
+        if(!spellCheckFindWord(word))
+            for(k = i; k < j; k++)
+                row->spell_ch[k] = 1;
+        i = j + 1;
+    }
+    free(word);
+}
+
 //function to update the 'hl' array for a row
 int editorUpdateSyntax(erow *row) {
     row->hl = realloc(row->hl, row->rsize);
@@ -369,7 +404,7 @@ int editorUpdateSyntax(erow *row) {
         prev_sep = is_separator(c);
         i++;
     }
-
+    editorUpdateSpellCheck(row);
     //updating the 'hl_open_comment' field of the current row
     //also checking if the current row was changed from being commented to uncommented and vice versa
     //if so calling the function recursively for the next row (as such commenting could effect multiple rows, so we should update all such rows not just the current row)
@@ -530,6 +565,7 @@ void editorInsertRow(int at, char *s, size_t len) {
 
     E.row[at].rsize = 0;
     E.row[at].render = NULL;
+    E.row[at].spell_ch = NULL;
     E.row[at].hl = NULL;
     E.row[at].hl_open_comment = 0;
     editorUpdateRow(&E.row[at]);
@@ -542,6 +578,8 @@ void editorInsertRow(int at, char *s, size_t len) {
 void editorFreeRow(erow *row) {
     free(row->render);
     free(row->chars);
+    free(row->spell_ch);
+    free(row->hl);
 }
 
 //function to delete a row, it frees the current row and moves the next row to the current row
@@ -684,6 +722,7 @@ void editorOpen(char *filename) {
 
         E.row[lineidx].rsize = 0;
         E.row[lineidx].render = NULL;
+        E.row[lineidx].spell_ch = NULL;
         E.row[lineidx].hl = NULL;
         E.row[lineidx].hl_open_comment = 0;
 
@@ -983,10 +1022,18 @@ void *editorDrawRow(void *arg_p) {
         //checking if a character is a digit, if so colouring the digit with a different colour
         char *c = &E.row[filerow].render[E.coloff];
         unsigned char *hl = &E.row[filerow].hl[E.coloff];
+        int *spell_ch = &E.row[filerow].spell_ch[E.coloff];
 
         int j, current_color = -1;      //to keep track of current color so as to minimise the number of colour updates (-1 means color of normal text)
-
+        int prev_spell_ch = 0, spell_chk = (spell_ch != NULL);
         for(j = 0; j < len; j++) {
+                if(spell_chk && *spell_ch != prev_spell_ch) {
+                if(*spell_ch == 0) abAppend(ab, "\x1b[24m", 5);
+                else abAppend(ab, "\x1b[4m", 5);
+                prev_spell_ch = *spell_ch;
+            }
+            spell_ch++;
+
             if(iscntrl(c[j])) {
                 char sym = (c[j] <= 26) ? '@' + c[j] : '?';
                 abAppend(ab, "\x1b[7m", 4);     //switching to inverted colours
@@ -1016,6 +1063,7 @@ void *editorDrawRow(void *arg_p) {
                 abAppend(ab, &c[j], 1);
             }
         }
+        abAppend(ab, "\x1b[24m", 5);
         abAppend(ab, "\x1b[39m", 5);
     }
     abAppend(ab, "\x1b[K\r\n", 5);
