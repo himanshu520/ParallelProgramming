@@ -27,6 +27,7 @@
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define HL_HIGHLIGHT_NUMBERS (1 << 0)
 #define HL_HIGHLIGHT_STRINGS (1 << 1)
+#define HL_HIGHLIGHT_SPELLCHECK (1 << 2)
 
 enum editorKey { BACKSPACE = 127, ARROW_LEFT = 1000, ARROW_RIGHT, ARROW_UP, ARROW_DOWN, DEL_KEY, HOME_KEY, END_KEY, PAGE_UP, PAGE_DOWN };
 enum editorHighlight { HL_NORMAL = 0, HL_COMMENT, HL_MLCOMMENT, HL_KEYWORD1, HL_KEYWORD2, HL_STRING, HL_NUMBER, HL_MATCH };
@@ -49,8 +50,15 @@ typedef struct erow {
     int size, rsize, idx;              //idx is the index of the row within the file
     char *chars, *render;              //pointer to a dynamically allocated character array representing actual row of text and the text to display
     unsigned char *hl;                 //pointer to an array storing the syntax highlighting details of each character of the current row
+    int *spell_ch;                     //pointer to an array that stores the spell checking info of the file
     int hl_open_comment;               //variable indicating whether the current row ended with an unclosed multiline comment
 } erow;
+
+//structure for node used to maintain tree for spell checking
+struct spellCheckTreeNode {
+    int isWord;
+    struct spellCheckTreeNode *ptr[26];
+};
 
 //structure to store the editor configuration
 struct editorConfig {
@@ -68,6 +76,7 @@ struct editorConfig {
     time_t statusmsg_time;
     struct editorSyntax *syntax;       //structure to store the syntax highlighting info
     struct termios orig_termios;       //we will store the original terminal configurations
+    struct spellCheckTreeNode *spellTree;
 } E;
 
 
@@ -76,7 +85,10 @@ char *C_HL_extensions[] = { ".c", ".h", ".cpp", NULL };
 char *C_HL_keywords[] = { "switch", "if", "while", "for", "break", "continue", "return", "else", "struct", "union", "typedef", "static", "enum", "class", "case", 
                          "int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|", "void|", NULL };
 
-struct editorSyntax HLDB[] = {{ "c", C_HL_extensions, C_HL_keywords, "//", "/*", "*/", (HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS) }};
+char *TXT_HL_extensions[] = { ".txt", NULL };
+char *TXT_HL_keywords[] = { NULL };
+struct editorSyntax HLDB[] = { { "c", C_HL_extensions, C_HL_keywords, "//", "/*", "*/", (HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS) },
+                               { "txt", TXT_HL_extensions, TXT_HL_keywords, NULL, NULL, NULL, (HL_HIGHLIGHT_SPELLCHECK) } };
 
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
 
@@ -224,6 +236,82 @@ int getWindowSize(int *rows, int *cols) {
 }
 
 
+/**************************************************************    spell checker    **************************************************************/
+//function to initialise a structure variable of type spellCheckTreeNode
+void spellCheckTreeNodeInit(struct spellCheckTreeNode *node) {
+    node->isWord = 0;
+    int i;
+    for(i = 0; i < 26; i++)
+        node->ptr[i] = NULL;
+}
+
+//function to add a new word to the spell checker tree
+void spellCheckTreeAddWord(struct spellCheckTreeNode *node, char *word) {
+    if((*word) == '\0') node->isWord = 1;
+    else {
+        int child = tolower(*word) - 'a';
+        if(node->ptr[child] == NULL) {
+            node->ptr[child] = malloc(sizeof(struct spellCheckTreeNode));
+            spellCheckTreeNodeInit(node->ptr[child]);
+        }
+        spellCheckTreeAddWord(node->ptr[child], word + 1);
+    }
+}
+
+//function to initialise the spell checker tree with words from words.txt
+void spellCheckTreeInit() {
+    FILE *fptr = fopen("words.txt", "r");
+    char *word = NULL;
+    size_t wordcap = 0;
+    ssize_t wordlen;
+    E.spellTree = malloc(sizeof(struct spellCheckTreeNode));
+    spellCheckTreeNodeInit(E.spellTree);
+    while((wordlen = getline(&word, &wordcap, fptr)) != -1) {
+        word[wordlen - 1] = '\0';
+        spellCheckTreeAddWord(E.spellTree, word);
+    }
+    fclose(fptr);
+}
+
+//function to delete the spell checker tree
+void spellCheckTreeDelete(struct spellCheckTreeNode *node) {
+    if(node == NULL) return;
+    int i;
+    for(i = 0; i < 26; i++)
+        spellCheckTreeDelete(node->ptr[i]);
+    free(node);
+}
+
+//function to check whether a word exists in the spell checker tree
+int spellCheckTreeCheckWord(struct spellCheckTreeNode *node, char *word) {
+    if(node == NULL) return 0;
+    if((*word) == '\0') return node->isWord;
+    return spellCheckTreeCheckWord(node->ptr[tolower(*word) - 'a'], word + 1);
+}
+
+//function to update the 'spell_ch' array for a row
+void editorUpdateSpellCheck(erow *row) {
+    row->spell_ch = realloc(row->spell_ch, row->rsize * sizeof(int));
+    memset(row->spell_ch, 0, row->rsize * sizeof(int));          //giving a default value that there is no syntax error for now
+
+    if(E.syntax == NULL || (E.syntax->flags & HL_HIGHLIGHT_SPELLCHECK) == 0) return;    //check if spell checking is to be done
+
+    int i = 0;
+    char *word = malloc(row->rsize);
+    while(i < row->rsize) {
+        int j, k;
+        for(j = i; j < row->rsize && isalpha(row->render[j]); j++)
+            word[j - i] = row->render[j];
+        word[j - i] = '\0';
+        if(!spellCheckTreeCheckWord(E.spellTree, word))
+            for(k = i; k < j; k++)
+                row->spell_ch[k] = 1;
+        i = j + 1;
+    }
+    free(word);
+}
+
+
 /************************************************************** syntax highlighting **************************************************************/
 //function that returns boolean value of whether c is a separator or not
 int is_separator(int c) {
@@ -351,6 +439,7 @@ void editorUpdateSyntax(erow *row) {
         prev_sep = is_separator(c);
         i++;
     }
+    editorUpdateSpellCheck(row);
 
     //updating the 'hl_open_comment' field of the current row
     //also checking if the current row was changed from being commented to uncommented and vice versa
@@ -365,7 +454,7 @@ void editorUpdateSyntax(erow *row) {
 int editorSyntaxToColor(int hl) {
     switch(hl) {
         case HL_COMMENT:
-        case HL_MLCOMMENT:     return 36;          //foreground cyan
+        case HL_MLCOMMENT:      return 36;          //foreground cyan
         case HL_KEYWORD1:       return 33;          //foreground yellow
         case HL_KEYWORD2:       return 32;          //foreground greed
         case HL_STRING:         return 35;          //foreground magenta
@@ -470,6 +559,7 @@ void editorInsertRow(int at, char *s, size_t len) {
 
     E.row[at].rsize = 0;
     E.row[at].render = NULL;
+    E.row[at].spell_ch = NULL;
     E.row[at].hl = NULL;
     E.row[at].hl_open_comment = 0;
     editorUpdateRow(&E.row[at]);
@@ -482,6 +572,8 @@ void editorInsertRow(int at, char *s, size_t len) {
 void editorFreeRow(erow *row) {
     free(row->render);
     free(row->chars);
+    free(row->spell_ch);
+    free(row->hl);
 }
 
 //function to delete a row, it frees the current row and moves the next row to the current row
@@ -789,10 +881,18 @@ void editorDrawRows(struct abuf *ab) {
             //checking if a character is a digit, if so colouring the digit with a different colour
             char *c = &E.row[filerow].render[E.coloff];
             unsigned char *hl = &E.row[filerow].hl[E.coloff];
+            int *spell_ch = &E.row[filerow].spell_ch[E.coloff];
 
             int j, current_color = -1;      //to keep track of current color so as to minimise the number of colour updates (-1 means color of normal text)
-
+                int prev_spell_ch = 0, spell_chk = (spell_ch != NULL);
             for(j = 0; j < len; j++) {
+                if(spell_chk && *spell_ch != prev_spell_ch) {
+                    if(*spell_ch == 0) abAppend(ab, "\x1b[24m", 5);
+                    else abAppend(ab, "\x1b[4m", 5);
+                    prev_spell_ch = *spell_ch;
+                }
+                spell_ch++;
+
                 if(iscntrl(c[j])) {
                     char sym = (c[j] <= 26) ? '@' + c[j] : '?';
                     abAppend(ab, "\x1b[7m", 4);     //switching to inverted colours
@@ -822,6 +922,7 @@ void editorDrawRows(struct abuf *ab) {
                     abAppend(ab, &c[j], 1);
                 }
             }
+            abAppend(ab, "\x1b[24m", 5);
             abAppend(ab, "\x1b[39m", 5);
         }
 
@@ -1049,9 +1150,10 @@ void editorProcessKeypress() {
 void initEditor() {
     E.cx = E.cy = E.rx = E.numrows = E.rowoff = E.coloff = E.statusmsg_time = E.dirty = 0;
     E.row = NULL, E.filename = NULL, E.statusmsg[0] = '\0';
-    E.syntax = NULL;
+    E.syntax = NULL, E.spellTree = NULL;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
     E.screenrows -= 2;
+    spellCheckTreeInit();
 }
 
 
