@@ -58,6 +58,7 @@ typedef struct erow {
     int hl_open_comment;               //variable indicating whether the current row ended with an unclosed multiline comment
 } erow;
 
+//structure for node used to maintain tree for spell checking
 struct spellCheckTreeNode {
     int isWord;
     struct spellCheckTreeNode *ptr[26];
@@ -254,6 +255,7 @@ int getWindowSize(int *rows, int *cols) {
 
 
 /**************************************************************    spell checker    **************************************************************/
+//function to initialise a structure variable of type spellCheckTreeNode
 void spellCheckTreeNodeInit(struct spellCheckTreeNode *node) {
     node->isWord = 0;
     int i;
@@ -261,6 +263,7 @@ void spellCheckTreeNodeInit(struct spellCheckTreeNode *node) {
         node->ptr[i] = NULL;
 }
 
+//function to add a new word to the spell checker tree
 void spellCheckTreeAddWord(struct spellCheckTreeNode *node, char *word) {
     if((*word) == '\0') node->isWord = 1;
     else {
@@ -273,6 +276,7 @@ void spellCheckTreeAddWord(struct spellCheckTreeNode *node, char *word) {
     }
 }
 
+//function to initialise the spell checker tree with words from words.txt
 void spellCheckTreeInit() {
     FILE *fptr = fopen("words.txt", "r");
     char *word = NULL;
@@ -287,6 +291,7 @@ void spellCheckTreeInit() {
     fclose(fptr);
 }
 
+//function to delete the spell checker tree
 void spellCheckTreeDelete(struct spellCheckTreeNode *node) {
     if(node == NULL) return;
     int i;
@@ -295,6 +300,7 @@ void spellCheckTreeDelete(struct spellCheckTreeNode *node) {
     free(node);
 }
 
+//function to check whether a word exists in the spell checker tree
 int spellCheckTreeCheckWord(struct spellCheckTreeNode *node, char *word) {
     if(node == NULL) return 0;
     if((*word) == '\0') return node->isWord;
@@ -452,6 +458,7 @@ int editorUpdateSyntax(erow *row) {
         i++;
     }
     editorUpdateSpellCheck(row);
+
     //updating the 'hl_open_comment' field of the current row
     //also checking if the current row was changed from being commented to uncommented and vice versa
     //if so calling the function recursively for the next row (as such commenting could effect multiple rows, so we should update all such rows not just the current row)
@@ -1074,7 +1081,7 @@ void *editorDrawRow(void *arg_p) {
         int j, current_color = -1;      //to keep track of current color so as to minimise the number of colour updates (-1 means color of normal text)
         int prev_spell_ch = 0, spell_chk = (spell_ch != NULL);
         for(j = 0; j < len; j++) {
-                if(spell_chk && *spell_ch != prev_spell_ch) {
+            if(spell_chk && *spell_ch != prev_spell_ch) {
                 if(*spell_ch == 0) abAppend(ab, "\x1b[24m", 5);
                 else abAppend(ab, "\x1b[4m", 5);
                 prev_spell_ch = *spell_ch;
