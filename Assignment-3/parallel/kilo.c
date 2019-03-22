@@ -58,6 +58,11 @@ typedef struct erow {
     int hl_open_comment;               //variable indicating whether the current row ended with an unclosed multiline comment
 } erow;
 
+struct spellCheckTreeNode {
+    int isWord;
+    struct spellCheckTreeNode *ptr[26];
+};
+
 //structure to store the editor configuration
 struct editorConfig {
     int cx, cy;                        //to keep track of the current position of the cursor within the file
@@ -76,6 +81,7 @@ struct editorConfig {
     struct editorSyntax *syntax;       //structure to store the syntax highlighting info
     struct termios orig_termios;       //we will store the original terminal configurations
     pthread_mutex_t file_mutex;        //mutex to write to file while saving
+    struct spellCheckTreeNode *spellTree;
 } E;
 
 
@@ -247,18 +253,52 @@ int getWindowSize(int *rows, int *cols) {
 }
 
 
-/************************************************************** syntax highlighting **************************************************************/
-//function that returns boolean value of whether c is a separator or not
-int is_separator(int c) {
-    return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[];", c) != NULL;
+/**************************************************************    spell checker    **************************************************************/
+void spellCheckTreeNodeInit(struct spellCheckTreeNode *node) {
+    node->isWord = 0;
+    int i;
+    for(i = 0; i < 26; i++)
+        node->ptr[i] = NULL;
 }
 
-int spellCheckFindWord(const char *word) {
-    char *words[] = {"the", "world", "is", "a", "big", "place"};
-    int i = 0;
-    for(i = 0; i < 6; i++)
-        if(strcmp(words[i], word) == 0) return 1;
-    return 0;
+void spellCheckTreeAddWord(struct spellCheckTreeNode *node, char *word) {
+    if((*word) == '\0') node->isWord = 1;
+    else {
+        int child = tolower(*word) - 'a';
+        if(node->ptr[child] == NULL) {
+            node->ptr[child] = malloc(sizeof(struct spellCheckTreeNode));
+            spellCheckTreeNodeInit(node->ptr[child]);
+        }
+        spellCheckTreeAddWord(node->ptr[child], word + 1);
+    }
+}
+
+void spellCheckTreeInit() {
+    FILE *fptr = fopen("words.txt", "r");
+    char *word = NULL;
+    size_t wordcap = 0;
+    ssize_t wordlen;
+    E.spellTree = malloc(sizeof(struct spellCheckTreeNode));
+    spellCheckTreeNodeInit(E.spellTree);
+    while((wordlen = getline(&word, &wordcap, fptr)) != -1) {
+        word[wordlen - 1] = '\0';
+        spellCheckTreeAddWord(E.spellTree, word);
+    }
+    fclose(fptr);
+}
+
+void spellCheckTreeDelete(struct spellCheckTreeNode *node) {
+    if(node == NULL) return;
+    int i;
+    for(i = 0; i < 26; i++)
+        spellCheckTreeDelete(node->ptr[i]);
+    free(node);
+}
+
+int spellCheckTreeCheckWord(struct spellCheckTreeNode *node, char *word) {
+    if(node == NULL) return 0;
+    if((*word) == '\0') return node->isWord;
+    return spellCheckTreeCheckWord(node->ptr[tolower(*word) - 'a'], word + 1);
 }
 
 //function to update the 'spell_ch' array for a row
@@ -275,12 +315,19 @@ void editorUpdateSpellCheck(erow *row) {
         for(j = i; j < row->rsize && isalpha(row->render[j]); j++)
             word[j - i] = row->render[j];
         word[j - i] = '\0';
-        if(!spellCheckFindWord(word))
+        if(!spellCheckTreeCheckWord(E.spellTree, word))
             for(k = i; k < j; k++)
                 row->spell_ch[k] = 1;
         i = j + 1;
     }
     free(word);
+}
+
+
+/************************************************************** syntax highlighting **************************************************************/
+//function that returns boolean value of whether c is a separator or not
+int is_separator(int c) {
+    return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[];", c) != NULL;
 }
 
 //function to update the 'hl' array for a row
@@ -667,7 +714,7 @@ void editorDelChar() {
 /**************************************************************       file io       **************************************************************/
 //function for converting rows to a single string
 //the function returns a pointer to the dynamically allocated character array that stores the file
-void* editorRowsToString(void *arg_p) {
+void *editorRowsToString(void *arg_p) {
     int *my_arg = arg_p;
     int fd = my_arg[0], my_start = my_arg[1] * THREAD_RANGE, my_end = my_start + THREAD_RANGE;
     int my_seekpos = my_arg[2], my_len = my_arg[3], j;
@@ -1333,12 +1380,12 @@ void *initEditor(void *arg_p) {
 
     E.cx = E.cy = E.rx = E.numrows = E.rowoff = E.coloff = E.statusmsg_time = E.dirty = 0;
     E.row = NULL, E.filename = NULL, E.statusmsg[0] = '\0';
-    E.syntax = NULL;
+    E.syntax = NULL, E.spellTree = NULL;
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
     E.screenrows -= 2;
     pthread_rwlock_init(&E.row_lock, NULL);
     pthread_mutex_init(&E.file_mutex, NULL);
-
+    spellCheckTreeInit();
     return NULL;
 }
 
