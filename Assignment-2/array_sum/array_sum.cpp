@@ -1,9 +1,10 @@
 #include<bits/stdc++.h>
 #include<pthread.h>
 #include<semaphore.h>
+#include<sys/time.h>
 #define MAX_THREADS 10
 #define MAX_REPEAT 10
-#define MAX_FUNCTIONS 3
+#define MAX_FUNCTIONS 4
 #define MAX_ARRAY_SIZE (int)(1e9)
 using namespace std;
 
@@ -11,9 +12,12 @@ typedef void* (*function_p) (void *);
 
 int array_size, no_of_threads, global_sum, global_rank;
 int *arr;
-double running_time[MAX_FUNCTIONS][MAX_THREADS];
+double running_time_avg[MAX_FUNCTIONS][MAX_THREADS];
+double running_time_max[MAX_FUNCTIONS][MAX_THREADS];
+double running_time_min[MAX_FUNCTIONS][MAX_THREADS];
 pthread_mutex_t sum_mutex;
 sem_t sum_semaphore;
+pthread_rwlock_t sum_rwlock;
 
 
 void* busy_wait_sum(void *arg) {
@@ -67,6 +71,21 @@ void *semaphore_sum(void *arg) {
     return NULL;
 }
 
+void *rwlock_sum(void *arg) {
+
+    int my_rank = *((int*) arg), my_sum = 0;
+    int my_low = (array_size + no_of_threads - 1) / no_of_threads * my_rank;
+    int my_high = min(my_low + (array_size + no_of_threads - 1) / no_of_threads, array_size);
+    
+    for(int i = my_low; i < my_high; i++)
+        my_sum += arr[i];
+
+    pthread_rwlock_wrlock(&sum_rwlock);
+    global_sum += my_sum;
+    pthread_rwlock_unlock(&sum_rwlock);
+
+    return NULL;
+}
 
 int main(int argc, char **argv) {
 
@@ -112,8 +131,8 @@ int main(int argc, char **argv) {
     }
 
 
-    function_p thread_functions[MAX_FUNCTIONS] = {&busy_wait_sum, &mutex_sum, &semaphore_sum};
-    string thread_functions_name[] = {"BusyWaiting", "Mutex", "Semaphore"};
+    function_p thread_functions[4] = {&busy_wait_sum, &mutex_sum, &semaphore_sum, &rwlock_sum};
+    string thread_functions_name[] = {"BusyWaiting", "Mutex", "Semaphore", "ReadWriteLock"};
 
     pthread_mutex_init(&sum_mutex, NULL);
     sem_init(&sum_semaphore, 0, 1);
@@ -122,12 +141,15 @@ int main(int argc, char **argv) {
 
         for(no_of_threads = 1; no_of_threads <= MAX_THREADS; no_of_threads++) {
 
-            running_time[function_no][no_of_threads - 1] = 0;
+            running_time_avg[function_no][no_of_threads - 1] = 0;
+            running_time_max[function_no][no_of_threads - 1] = - DBL_MAX;
+            running_time_min[function_no][no_of_threads - 1] = DBL_MAX;
 
             for(int repeat_count = 0; repeat_count < MAX_REPEAT; repeat_count++) {
                 
                 global_sum = global_rank = 0;
-                clock_t start_time = clock();
+                struct timeval start_time, end_time; 
+                gettimeofday(&start_time, NULL);
 
                 pthread_t threads[no_of_threads];
                 int thread_arg[no_of_threads];
@@ -150,11 +172,18 @@ int main(int argc, char **argv) {
                 for(int thread_no = 0; thread_no < no_of_threads; thread_no++)
                     pthread_join(threads[thread_no], NULL);
 
-                clock_t end_time = clock();
-                running_time[function_no][no_of_threads - 1] += ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
+                gettimeofday(&end_time, NULL);
+                double time_taken;
+                time_taken = (end_time.tv_sec - start_time.tv_sec) * 1e6; 
+                time_taken = (time_taken + (end_time.tv_usec - start_time.tv_usec)) * 1e-6;
+                running_time_avg[function_no][no_of_threads - 1] += time_taken;
+                if(time_taken > running_time_max[function_no][no_of_threads - 1])
+                    running_time_max[function_no][no_of_threads - 1] = time_taken;
+                if(time_taken < running_time_min[function_no][no_of_threads - 1])
+                    running_time_min[function_no][no_of_threads - 1] = time_taken;
             }
 
-            running_time[function_no][no_of_threads - 1] /= MAX_REPEAT;
+            running_time_avg[function_no][no_of_threads - 1] /= MAX_REPEAT;
 
         }
     }
@@ -163,12 +192,16 @@ int main(int argc, char **argv) {
     cout << "\nThe sum of the array is: " << global_sum << "\n";
     cout << "The size of the array is: " << array_size << "\n\n";
     
-    cout << "The time spent for computing the array sum (in order of thread no from 1 to " << MAX_THREADS << "):\n";
-    for(int function_no = 0; function_no < MAX_FUNCTIONS; function_no++) {
-        cout << thread_functions_name[function_no] << " :\n\t";
-        for(int no_of_threads = 0; no_of_threads < MAX_THREADS; no_of_threads++)
-            cout << setw(10) << fixed << setprecision(5) << running_time[function_no][no_of_threads] << "\t";
-        cout << "\n\n";
+    double (*running_time[3])[10] = { running_time_avg, running_time_max, running_time_min };
+    string str[3] = { "average", "maximum", "minimum"};
+    for(int i = 0; i < 3; i++) {
+        cout << "The " << str[i] << " time spent for computing the array sum (in order of thread no from 1 to " << MAX_THREADS << "):\n";
+        for(int function_no = 0; function_no < MAX_FUNCTIONS; function_no++) {
+            cout << thread_functions_name[function_no] << " :\n\t";
+            for(int no_of_threads = 0; no_of_threads < MAX_THREADS; no_of_threads++)
+                cout << setw(10) << fixed << setprecision(5) << running_time[i][function_no][no_of_threads] << "\t";
+            cout << "\n\n";
+        }
     }
     
 
@@ -181,8 +214,10 @@ int main(int argc, char **argv) {
         fout << MAX_FUNCTIONS << "\n" << MAX_THREADS << "\n";
         for(int function_no = 0; function_no < MAX_FUNCTIONS; function_no++) {
             fout << thread_functions_name[function_no] << "\n";
-            for(int no_of_threads = 0; no_of_threads < MAX_THREADS; no_of_threads++)
-                fout << setw(10) << setprecision(5) << running_time[function_no][no_of_threads] << "\n";
+            for(int ty = 0; ty < 3; ty++) {
+                for(int no_of_threads = 0; no_of_threads < MAX_THREADS; no_of_threads++)
+                    fout << setw(10) << setprecision(5) << running_time[ty][function_no][no_of_threads] << "\n";
+            }
         }
         fout.close();
     } else {
