@@ -1,7 +1,8 @@
 #include<bits/stdc++.h>
 #include<pthread.h>
 #include<semaphore.h>
-#define MAX_REPEAT 1
+#include<sys/time.h>
+#define MAX_REPEAT 5
 #define MAX_FUNCTIONS 3
 #define MAX_ARRAY_SIZE 20
 #define MAX_ITERATIONS 500
@@ -12,7 +13,9 @@ typedef void* (*function_p) (void *);
 
 int array_size, no_of_threads, no_of_iterations, mutex_count;
 double *arr_old, *arr_new;
-double running_time[MAX_FUNCTIONS];
+double running_time_avg[MAX_FUNCTIONS];
+double running_time_max[MAX_FUNCTIONS];
+double running_time_min[MAX_FUNCTIONS];
 pthread_mutex_t sum_mutex;
 pthread_mutex_t condition_mutex;
 pthread_cond_t condition_var;
@@ -170,10 +173,13 @@ int main(int argc, char **argv) {
 
     for(int function_no = 0; function_no < MAX_FUNCTIONS; function_no++) {
 
-        running_time[function_no] = 0;
+    running_time_avg[function_no] = 0;
+    running_time_max[function_no] = -DBL_MAX;
+    running_time_min[function_no] = DBL_MAX;
 
         for(int repeat_count = 0; repeat_count < MAX_REPEAT; repeat_count++) {
-            clock_t start_time = clock();
+            struct timeval start_time, end_time; 
+            gettimeofday(&start_time, NULL);
 
             pthread_t threads[no_of_threads];
             int thread_arg[no_of_threads];
@@ -200,11 +206,18 @@ int main(int argc, char **argv) {
             for(int thread_no = 0; thread_no < no_of_threads; thread_no++)
                 pthread_join(threads[thread_no], NULL);
 
-            clock_t end_time = clock();
-            running_time[function_no] += ((double)(end_time - start_time)) / CLOCKS_PER_SEC;
+            gettimeofday(&end_time, NULL);
+            double time_taken;
+            time_taken = (end_time.tv_sec - start_time.tv_sec) * 1e6; 
+            time_taken = (time_taken + (end_time.tv_usec - start_time.tv_usec)) * 1e-6;
+            running_time_avg[function_no] += time_taken;
+            if(time_taken > running_time_max[function_no])
+                running_time_max[function_no] = time_taken;
+            if(time_taken < running_time_min[function_no])
+                running_time_min[function_no] = time_taken;
         }
 
-        running_time[function_no] /= MAX_REPEAT;
+        running_time_avg[function_no] /= MAX_REPEAT;
 
     }
 
@@ -212,10 +225,10 @@ int main(int argc, char **argv) {
     cout << "The size of the array is: " << array_size << "\n";
     cout << "The number of iterations is: " << no_of_iterations << "\n\n";
     
-    cout << "The time spent for reaching equilibrium is :\n";
+    cout << "The time spent for reaching equilibrium is (avg, max, min):\n";
     for(int function_no = 0; function_no < MAX_FUNCTIONS; function_no++) {
         cout << thread_functions_name[function_no] << " : " << fixed << setprecision(5) 
-             << running_time[function_no] << "\n";
+             << running_time_avg[function_no] << " " << running_time_max[function_no] << " " << running_time_min[function_no] << "\n";
     }
     
 
@@ -228,7 +241,8 @@ int main(int argc, char **argv) {
         fout << MAX_FUNCTIONS << "\n";
         for(int function_no = 0; function_no < MAX_FUNCTIONS; function_no++) {
             fout << thread_functions_name[function_no] << "\n";
-            fout << setw(10) << setprecision(5) << running_time[function_no] << "\n";
+            fout << setw(10) << setprecision(5) << running_time_avg[function_no] << "\n";
+            fout << running_time_max[function_no] << "\n" << running_time_min[function_no] << "\n";
         }
         fout.close();
     } else {
