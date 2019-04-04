@@ -12,10 +12,11 @@
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
+#include<sys/ioctl.h>
 #include<sys/types.h>
+#include<sys/time.h>
 #include<unistd.h>
 #include<termios.h>
-#include<sys/ioctl.h>
 #include<time.h>
 #include<unistd.h>
 
@@ -681,6 +682,10 @@ char* editorRowsToString(int *buflen) {
 
 //function for opening and reading files from disk
 void editorOpen(char *filename) {
+    FILE *logFile = fopen("log.txt", "a");
+    struct timeval start_time, end_time; 
+    gettimeofday(&start_time, NULL);
+
     free(E.filename);
     E.filename = strdup(filename);
 
@@ -699,14 +704,27 @@ void editorOpen(char *filename) {
     free(line);
     fclose(fp);
     E.dirty = 0;
+
+    gettimeofday(&end_time, NULL);
+    double time_taken;
+    time_taken = (end_time.tv_sec - start_time.tv_sec) * 1e6; 
+    time_taken = (time_taken + (end_time.tv_usec - start_time.tv_usec)) * 1e-6;
+
+    fprintf(logFile, "Filename : %s, Open time : %.4f\n", E.filename, time_taken);
+    fclose(logFile);
 }
 
 //function to save the currently opened file
 void editorSave() {
+    FILE *logFile = fopen("log.txt", "a");
+    struct timeval start_time, end_time; 
+    gettimeofday(&start_time, NULL);
+
     if(E.filename == NULL) {
         E.filename = editorPrompt("Save as: %s (ESC to cancel)", NULL);
         if(E.filename == NULL) {
             editorSetStatusMessage("Save aborted");
+            fclose(logFile);
             return;
         }
         editorSelectSyntaxHighlight();
@@ -723,9 +741,16 @@ void editorSave() {
                 free(buf);
                 E.dirty = 0;
                 editorSetStatusMessage("%d bytes written to disk", len);
+
+                gettimeofday(&end_time, NULL);
+                double time_taken;
+                time_taken = (end_time.tv_sec - start_time.tv_sec) * 1e6; 
+                time_taken = (time_taken + (end_time.tv_usec - start_time.tv_usec)) * 1e-6;
+                fprintf(logFile, "Filename : %s, Save time : %.4f\n", E.filename, time_taken);
+                fclose(logFile);
                 return;
             }
-        close(fd);       
+        close(fd);
     }
 
     free(buf);
