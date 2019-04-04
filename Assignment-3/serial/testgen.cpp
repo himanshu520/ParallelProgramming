@@ -6,7 +6,7 @@ int main() {
     cin.tie(nullptr);
 
     int cnt = 1;
-    for(int k = 10; k < 10000; k *= 10, cnt++)  {
+    for(int k = 2; k < 10000; k *= 10, cnt++)  {
         ifstream in("kilo.c");
         ofstream out("test" + to_string(cnt) + ".c");
         string str;
@@ -23,7 +23,7 @@ int main() {
     }
 
 
-    for(int k = 10; k < 10000; k *= 10, cnt++)  {
+    for(int k = 5; k < 10000; k *= 10, cnt++)  {
         ifstream in("kilo.c");
         ofstream out("test" + to_string(cnt) + ".txt");
         string str;
