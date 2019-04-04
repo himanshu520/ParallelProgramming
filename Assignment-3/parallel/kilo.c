@@ -16,6 +16,7 @@
 #include<sys/file.h>
 #include<sys/ioctl.h>
 #include<sys/types.h>
+#include<sys/time.h>
 #include<unistd.h>
 #include<termios.h>
 #include<time.h>
@@ -32,6 +33,8 @@
 #define HL_HIGHLIGHT_SPELLCHECK (1 << 2)
 #define UNUSED(x) (void)(x)
 #define THREAD_RANGE 10000
+#define REALLOC_SIZE 10000
+#define REALLOC_THREAD_SIZE 100
 
 enum editorKey { BACKSPACE = 127, ARROW_LEFT = 1000, ARROW_RIGHT, ARROW_UP, ARROW_DOWN, DEL_KEY, HOME_KEY, END_KEY, PAGE_UP, PAGE_DOWN };
 enum editorHighlight { HL_NORMAL = 0, HL_COMMENT, HL_MLCOMMENT, HL_KEYWORD1, HL_KEYWORD2, HL_STRING, HL_NUMBER, HL_MATCH };
@@ -329,6 +332,28 @@ void editorUpdateSpellCheck(erow *row) {
     free(word);
 }
 
+int *editorUpdateSpellCheckParallel(char *render, int rsize) {
+    int *spell_ch = malloc(rsize * sizeof(int));
+    memset(spell_ch, 0, rsize * sizeof(int));          //giving a default value that there is no syntax error for now
+
+    if(E.syntax == NULL || (E.syntax->flags & HL_HIGHLIGHT_SPELLCHECK) == 0) return spell_ch;    //check if spell checking is to be done
+
+    int i = 0;
+    char *word = malloc(rsize);
+    while(i < rsize) {
+        int j, k;
+        for(j = i; j < rsize && isalpha(render[j]); j++)
+            word[j - i] = render[j];
+        word[j - i] = '\0';
+        if(!spellCheckTreeCheckWord(E.spellTree, word))
+            for(k = i; k < j; k++)
+                spell_ch[k] = 1;
+        i = j + 1;
+    }
+    free(word);
+    return spell_ch;
+}
+
 
 /************************************************************** syntax highlighting **************************************************************/
 //function that returns boolean value of whether c is a separator or not
@@ -457,7 +482,6 @@ int editorUpdateSyntax(erow *row) {
         prev_sep = is_separator(c);
         i++;
     }
-    editorUpdateSpellCheck(row);
 
     //updating the 'hl_open_comment' field of the current row
     //also checking if the current row was changed from being commented to uncommented and vice versa
@@ -503,8 +527,12 @@ void *editorSelectSyntaxHighlight(void *arg_p) {
 
                 //updating the highlighting of the current file
                 int filerow;
-                for(filerow = 0; filerow < E.numrows; )
+                for(filerow = 0; filerow < E.numrows; ) {
+                    int k = filerow;
                     filerow = editorUpdateSyntax(&E.row[filerow]) + 1;
+                    for(; k < filerow; k++)
+                        editorUpdateSpellCheck(&E.row[k]);
+                }
                 
                 return NULL;
             }
@@ -562,6 +590,7 @@ void editorUpdateRow(erow *row) {
 
     //calling the editorUpdateSyntax() function to work out the highlighting
     editorUpdateSyntax(row);
+    editorUpdateSpellCheck(row);
 }
 
 //this function will update render field of a 'erow' from its 'chars' field (called from only inside openEditor() function)
@@ -590,11 +619,13 @@ void *editorUpdateRowParallel(void *arg_p) {
             } else rowrender[idx++] = rowchars[j];
         }
         rowrender[idx] = '\0';
-        
+        int *spell_ch = editorUpdateSpellCheckParallel(rowrender, rowsz);
+
         pthread_rwlock_rdlock(&E.row_lock);
         free(E.row[i].render);
         E.row[i].render = rowrender;
         E.row[i].rsize = idx;
+        E.row[i].spell_ch = spell_ch;
         pthread_rwlock_unlock(&E.row_lock);
     }
 
@@ -745,6 +776,10 @@ void *editorRowsToString(void *arg_p) {
 
 //function for opening and reading files from disk
 void editorOpen(char *filename) {
+    FILE *logFile = fopen("log.txt", "a");
+    struct timeval start_time, end_time; 
+    gettimeofday(&start_time, NULL);
+
     free(E.filename);
     E.filename = strdup(filename);
 
@@ -760,14 +795,18 @@ void editorOpen(char *filename) {
     pthread_t **thread_p = NULL;
     int **thread_arg = NULL;
     int lineidx = -1, thd_cnt = 0;
+    int currows = 0, thdrows = 0;
 
     while((linelen = getline(&line, &linecap, fp)) != -1) {
         while(linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) linelen--;
 
         E.numrows++, lineidx++;
-        pthread_rwlock_wrlock(&E.row_lock);
-        E.row = realloc(E.row, sizeof(erow) * E.numrows);
-        pthread_rwlock_unlock(&E.row_lock);
+        if(E.numrows > currows) {
+            currows += REALLOC_SIZE;
+            pthread_rwlock_wrlock(&E.row_lock);
+            E.row = realloc(E.row, sizeof(erow) * currows);
+            pthread_rwlock_unlock(&E.row_lock);
+        }
         E.row[lineidx].chars = malloc(linelen + 1);
         memcpy(E.row[lineidx].chars, line, linelen);
         E.row[lineidx].chars[linelen] = '\0';
@@ -782,8 +821,11 @@ void editorOpen(char *filename) {
 
         if(lineidx % THREAD_RANGE == (THREAD_RANGE - 1)) {
             thd_cnt++;
-            thread_p = realloc(thread_p, sizeof(pthread_t *) * thd_cnt);
-            thread_arg = realloc(thread_arg, sizeof(int *) * thd_cnt);
+            if(thd_cnt > thdrows) {
+                thdrows += REALLOC_THREAD_SIZE;
+                thread_p = realloc(thread_p, sizeof(pthread_t *) * thdrows);
+                thread_arg = realloc(thread_arg, sizeof(int *) * thdrows);
+            }
             thread_p[thd_cnt - 1] = malloc(sizeof(pthread_t));
             thread_arg[thd_cnt - 1] = malloc(sizeof(int));
             *thread_arg[thd_cnt - 1] = thd_cnt - 1;
@@ -794,8 +836,11 @@ void editorOpen(char *filename) {
 
     if(lineidx % THREAD_RANGE < THREAD_RANGE - 1) {
         thd_cnt++;
-        thread_p = realloc(thread_p, sizeof(pthread_t *) * thd_cnt);
-        thread_arg = realloc(thread_arg, sizeof(int *) * thd_cnt);
+        if(thd_cnt > thdrows) {
+            thdrows += REALLOC_THREAD_SIZE;
+            thread_p = realloc(thread_p, sizeof(pthread_t *) * thdrows);
+            thread_arg = realloc(thread_arg, sizeof(int *) * thdrows);
+        }
         thread_p[thd_cnt - 1] = malloc(sizeof(pthread_t));
         thread_arg[thd_cnt - 1] = malloc(sizeof(int));
         *thread_arg[thd_cnt - 1] = thd_cnt - 1;
@@ -812,12 +857,25 @@ void editorOpen(char *filename) {
     for(i = 0; i < E.numrows; )
         i = editorUpdateSyntax(&E.row[i]) + 1;
 
+    E.row = realloc(E.row, sizeof(erow) * E.numrows);
     free(line), free(thread_p), free(thread_arg);
     fclose(fp);
+
+    gettimeofday(&end_time, NULL);
+    double time_taken;
+    time_taken = (end_time.tv_sec - start_time.tv_sec) * 1e6; 
+    time_taken = (time_taken + (end_time.tv_usec - start_time.tv_usec)) * 1e-6;
+
+    fprintf(logFile, "Filename : %s, Open time : %.4f\n", E.filename, time_taken);
+    fclose(logFile);
 }
 
 //function to save the currently opened file
 void editorSave() {
+    FILE *logFile = fopen("log.txt", "a");
+    struct timeval start_time, end_time; 
+    gettimeofday(&start_time, NULL);
+
     pthread_t editorSelectSyntaxHighlight_thd;
     int highlight_thd = 0;
 
@@ -825,6 +883,7 @@ void editorSave() {
         E.filename = editorPrompt("Save as: %s (ESC to cancel)", NULL);
         if(E.filename == NULL) {
             editorSetStatusMessage("Save aborted");
+            fclose(logFile);
             return;
         }
         pthread_create(&editorSelectSyntaxHighlight_thd, NULL, editorSelectSyntaxHighlight, NULL);
@@ -834,6 +893,14 @@ void editorSave() {
     if(E.numrows == 0) {
         editorSetStatusMessage("0 bytes written to disk");
         if(highlight_thd) pthread_join(editorSelectSyntaxHighlight_thd, NULL);
+
+        gettimeofday(&end_time, NULL);
+        double time_taken;
+        time_taken = (end_time.tv_sec - start_time.tv_sec) * 1e6; 
+        time_taken = (time_taken + (end_time.tv_usec - start_time.tv_usec)) * 1e-6;
+
+        fprintf(logFile, "Filename : %s, Open time : %.4f\n", E.filename, time_taken);
+        fclose(logFile);
         return;
     }
 
@@ -868,6 +935,14 @@ void editorSave() {
             editorSetStatusMessage("%d bytes written to disk", len[E.numrows - 1]);
             free(thread_p), free(arg_p), free(len);
             if(highlight_thd) pthread_join(editorSelectSyntaxHighlight_thd, NULL);
+
+            gettimeofday(&end_time, NULL);
+            double time_taken;
+            time_taken = (end_time.tv_sec - start_time.tv_sec) * 1e6; 
+            time_taken = (time_taken + (end_time.tv_usec - start_time.tv_usec)) * 1e-6;
+
+            fprintf(logFile, "Filename : %s, Open time : %.4f\n", E.filename, time_taken);
+            fclose(logFile);
             return;
         }
         close(fd);
