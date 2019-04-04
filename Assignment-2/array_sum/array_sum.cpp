@@ -4,13 +4,14 @@
 #include<sys/time.h>
 #define MAX_THREADS 10
 #define MAX_REPEAT 10
+#define MAX_SUM_REPEAT 10
 #define MAX_FUNCTIONS 4
 #define MAX_ARRAY_SIZE (int)(1e9)
 using namespace std;
 
 typedef void* (*function_p) (void *);
 
-int array_size, no_of_threads, global_sum, global_rank;
+long long array_size, no_of_threads, global_sum, global_rank;
 int *arr;
 double running_time_avg[MAX_FUNCTIONS][MAX_THREADS];
 double running_time_max[MAX_FUNCTIONS][MAX_THREADS];
@@ -22,16 +23,21 @@ pthread_rwlock_t sum_rwlock;
 
 void* busy_wait_sum(void *arg) {
     
-    int my_rank = *((int*) arg), my_sum = 0;
+    int my_rank = *((int*) arg);
     int my_low = (array_size + no_of_threads - 1) / no_of_threads * my_rank;
     int my_high = min(my_low + (array_size + no_of_threads - 1) / no_of_threads, array_size);
+    long long my_sum = 0;
 
-    for(int i = my_low; i < my_high; i++)
-        my_sum += arr[i];
+    for(int k = 0; k < MAX_SUM_REPEAT; k++) {
+        for(int i = my_low; i < my_high; i++)
+            my_sum += arr[i];
 
-    while(global_rank != my_rank); {
-        global_sum += my_sum;
-        global_rank++;
+        while(global_rank != my_rank); {
+            global_sum += my_sum;
+            global_rank = (global_rank + 1) % no_of_threads;
+        }
+        
+        my_sum = 0;
     }
 
     return NULL;
@@ -40,16 +46,21 @@ void* busy_wait_sum(void *arg) {
 
 void* mutex_sum(void *arg) {
 
-    int my_rank = *((int*) arg), my_sum = 0;
+    int my_rank = *((int*) arg);
     int my_low = (array_size + no_of_threads - 1) / no_of_threads * my_rank;
     int my_high = min(my_low + (array_size + no_of_threads - 1) / no_of_threads, array_size);
+    long long my_sum = 0;
     
-    for(int i = my_low; i < my_high; i++)
-        my_sum += arr[i];
+    for(int k = 0; k < MAX_SUM_REPEAT; k++) {
+        for(int i = my_low; i < my_high; i++)
+            my_sum += arr[i];
 
-    pthread_mutex_lock(&sum_mutex);
-    global_sum += my_sum;
-    pthread_mutex_unlock(&sum_mutex);
+        pthread_mutex_lock(&sum_mutex);
+        global_sum += my_sum;
+        pthread_mutex_unlock(&sum_mutex);
+
+        my_sum = 0;
+    }
 
     return NULL;
 }
@@ -57,32 +68,42 @@ void* mutex_sum(void *arg) {
 
 void *semaphore_sum(void *arg) {
 
-    int my_rank = *((int*) arg), my_sum = 0;
+    int my_rank = *((int*) arg);
     int my_low = (array_size + no_of_threads - 1) / no_of_threads * my_rank;
     int my_high = min(my_low + (array_size + no_of_threads - 1) / no_of_threads, array_size);
+    long long my_sum = 0;
     
-    for(int i = my_low; i < my_high; i++)
-        my_sum += arr[i];
+    for(int k = 0; k < MAX_SUM_REPEAT; k++) {
+        for(int i = my_low; i < my_high; i++)
+            my_sum += arr[i];
 
-    sem_wait(&sum_semaphore);
-    global_sum += my_sum;
-    sem_post(&sum_semaphore);
+        sem_wait(&sum_semaphore);
+        global_sum += my_sum;
+        sem_post(&sum_semaphore);
+
+        my_sum = 0;
+    }
 
     return NULL;
 }
 
 void *rwlock_sum(void *arg) {
 
-    int my_rank = *((int*) arg), my_sum = 0;
+    int my_rank = *((int*) arg);
     int my_low = (array_size + no_of_threads - 1) / no_of_threads * my_rank;
     int my_high = min(my_low + (array_size + no_of_threads - 1) / no_of_threads, array_size);
+    long long my_sum = 0;
     
-    for(int i = my_low; i < my_high; i++)
-        my_sum += arr[i];
+    for(int k = 0; k < MAX_SUM_REPEAT; k++) {
+        for(int i = my_low; i < my_high; i++)
+            my_sum += arr[i];
 
-    pthread_rwlock_wrlock(&sum_rwlock);
-    global_sum += my_sum;
-    pthread_rwlock_unlock(&sum_rwlock);
+        pthread_rwlock_wrlock(&sum_rwlock);
+        global_sum += my_sum;
+        pthread_rwlock_unlock(&sum_rwlock);
+
+        my_sum = 0;
+    }
 
     return NULL;
 }
